@@ -1,0 +1,46 @@
+name: Sync Database
+
+on:
+  schedule:
+    # Run at 4 AM UTC daily (11 PM ET / 8 PM PT)
+    - cron: '0 4 * * *'
+  workflow_dispatch:  # Allow manual trigger from GitHub UI
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download latest database from website
+        run: |
+          # Name includes timestamp so the Streamlit app (which sorts by filename) picks it up
+          FILENAME="beerleague_backup_$(date -u +%Y%m%d_%H%M%S).db"
+          curl -f -o "data/${FILENAME}" \
+            -H "x-export-key: ${{ secrets.DB_EXPORT_KEY }}" \
+            "${{ secrets.WEBSITE_URL }}/api/db-export"
+          echo "DB_FILE=${FILENAME}" >> $GITHUB_ENV
+
+      - name: Remove old snapshots (keep only the latest)
+        run: |
+          cd data
+          # Keep only the file we just downloaded
+          ls -1 *.db | grep -v "$DB_FILE" | xargs -r rm -f
+
+      - name: Check if anything changed
+        id: check
+        run: |
+          git add data/
+          if git diff --cached --quiet; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit and push updated database
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update database snapshot $(date -u +%Y-%m-%d)"
+          git push --force-with-lease

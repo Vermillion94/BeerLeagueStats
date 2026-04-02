@@ -66,6 +66,21 @@ _TBL_CELL_BASE = dict(
 )
 
 
+def _valid_color(color) -> bool:
+    """Check if a value is a usable color string (not None, nan, or empty)."""
+    if color is None:
+        return False
+    if isinstance(color, float):
+        return False
+    return bool(str(color).strip())
+
+
+def _get_color(team_colors: dict, tid, fallback_idx: int) -> str:
+    """Get a team color from the map, falling back to the palette."""
+    c = team_colors.get(tid)
+    return c if _valid_color(c) else TEAM_PALETTE[fallback_idx % len(TEAM_PALETTE)]
+
+
 def _alternating_fills(n: int) -> list:
     """Return alternating row fill colors for tables."""
     return [CARD_BG if i % 2 == 0 else CARD_BG_ALT for i in range(n)]
@@ -983,7 +998,7 @@ def chart_elo_standings(standings_df: pd.DataFrame,
     team_colors = team_colors or {}
     df = standings_df.sort_values("elo", ascending=True)
 
-    colors = [team_colors.get(tid, TEAM_PALETTE[i % len(TEAM_PALETTE)])
+    colors = [_get_color(team_colors, tid, i)
               for i, tid in enumerate(df["team_id"])]
 
     fig = _base("Elo Standings", height=max(320, 45 * len(df) + 70))
@@ -1039,7 +1054,7 @@ def chart_elo_history(history_df: pd.DataFrame,
     for i, team_name in enumerate(teams):
         sub = history_df[history_df["name"] == team_name].sort_values("week")
         tid = sub["team_id"].iloc[0] if not sub.empty else ""
-        color = team_colors.get(tid, TEAM_PALETTE[i % len(TEAM_PALETTE)])
+        color = _get_color(team_colors, tid, i)
         is_highlight = team_name in highlight_names
 
         fig.add_trace(go.Scatter(
@@ -1256,7 +1271,7 @@ def chart_draft_diversity(diversity_df: pd.DataFrame, team_colors: dict = None) 
     team_colors = team_colors or {}
     df = diversity_df.sort_values("unique_champs", ascending=True)
 
-    colors = [team_colors.get(tid, TEAM_PALETTE[i % len(TEAM_PALETTE)])
+    colors = [_get_color(team_colors, tid, i)
               for i, tid in enumerate(df["teamId"])]
 
     fig = _base("Draft Diversity", height=max(280, 45 * len(df) + 70))
@@ -1599,7 +1614,7 @@ def chart_elo_standings_with_delta(standings_df: pd.DataFrame,
         df["elo_delta"] = 0
         df["rank_delta"] = 0
 
-    colors = [team_colors.get(tid, TEAM_PALETTE[i % len(TEAM_PALETTE)])
+    colors = [_get_color(team_colors, tid, i)
               for i, tid in enumerate(df["team_id"])]
 
     texts = []
@@ -2063,7 +2078,8 @@ def chart_team_momentum(all_matches: pd.DataFrame,
 
     for tid, team_data in team_rolling.items():
         name = name_map.get(tid, tid)
-        color = team_colors.get(tid, TEXT_SEC)
+        c = team_colors.get(tid)
+        color = c if _valid_color(c) else TEXT_SEC
         is_hl = tid in highlight_ids
 
         fig.add_trace(go.Scatter(
@@ -2442,7 +2458,7 @@ def chart_team_identities(records_df: pd.DataFrame,
         y=df["name"],
         x=df["win_pct"] * 100 if "win_pct" in df.columns else df["series_wins"],
         orientation="h",
-        marker_color=[team_colors.get(str(tid), TEXT_DIM)
+        marker_color=[c if _valid_color(c := team_colors.get(str(tid))) else TEXT_DIM
                       for tid in df["teamId"]],
         marker_line_width=0,
         opacity=0.6,

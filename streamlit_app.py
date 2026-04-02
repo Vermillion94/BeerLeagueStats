@@ -332,7 +332,7 @@ with tabs[0]:
             with col_obj:
                 st.plotly_chart(
                     charts.chart_objectives_winners_vs_losers(team_stats, matches),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             # -- Kill scatter + multi-kill table --------------------------------
@@ -340,18 +340,18 @@ with tabs[0]:
             with col_kd:
                 st.plotly_chart(
                     charts.chart_kill_scatter(team_stats, matches, ps),
-                    use_container_width=True,
+                    width="stretch",
                 )
             with col_mk:
                 st.plotly_chart(
                     charts.chart_multikill_table(ps),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             # -- Game durations ------------------------------------------------
             st.plotly_chart(
                 charts.chart_game_durations(ps, matches),
-                use_container_width=True,
+                width="stretch",
             )
 
             # -- What Winners Do + Role Impact ---------------------------------
@@ -361,18 +361,18 @@ with tabs[0]:
             with col_wwd:
                 st.plotly_chart(
                     charts.chart_what_winners_do(team_stats, matches, ps),
-                    use_container_width=True,
+                    width="stretch",
                 )
             with col_ri:
                 st.plotly_chart(
                     charts.chart_role_impact(ps, role_map),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             # -- Popular Champions by Role -------------------------------------
             st.plotly_chart(
                 charts.chart_champions_by_role(ps, role_map),
-                use_container_width=True,
+                width="stretch",
             )
 
             # -- Gold Economy + Damage Composition side by side ------------------
@@ -380,12 +380,12 @@ with tabs[0]:
             with col_ge:
                 st.plotly_chart(
                     charts.chart_gold_economy(ps, role_map),
-                    use_container_width=True,
+                    width="stretch",
                 )
             with col_dc:
                 st.plotly_chart(
                     charts.chart_damage_composition(ps, team_stats, matches),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             # -- Weekly Superlatives + Ping Stats side by side -------------------
@@ -393,12 +393,12 @@ with tabs[0]:
             with col_sup:
                 st.plotly_chart(
                     charts.chart_weekly_superlatives(ps),
-                    use_container_width=True,
+                    width="stretch",
                 )
             with col_ping:
                 st.plotly_chart(
                     charts.chart_ping_stats(ps),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             st.markdown(gold_divider(), unsafe_allow_html=True)
@@ -472,17 +472,17 @@ with tabs[1]:
 
                     st.plotly_chart(
                         charts.chart_impact_factor_bar(top5, div),
-                        use_container_width=True,
+                        width="stretch",
                     )
                     st.plotly_chart(
                         charts.chart_pow_radar(top5, div),
-                        use_container_width=True,
+                        width="stretch",
                     )
 
             with st.expander("HOW IS IMPACT FACTOR CALCULATED?"):
                 rows = weight_breakdown()
                 df_w = pd.DataFrame(rows, columns=["Metric", "Weight", "Rationale"])
-                st.dataframe(df_w, use_container_width=True, hide_index=True)
+                st.dataframe(df_w, width="stretch", hide_index=True)
                 st.markdown(f"**Win bonus:** x{1.15} if the player's team won.")
                 st.markdown("All metrics normalized 0-1 within the week's player pool before weighting.")
 
@@ -514,7 +514,7 @@ with tabs[2]:
             if not records.empty:
                 st.plotly_chart(
                     charts.chart_team_records(records, team_colors_map),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             # POW History: compute POW for each completed week
@@ -536,7 +536,7 @@ with tabs[2]:
             if pow_hist:
                 st.plotly_chart(
                     charts.chart_pow_history(pow_hist),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             # Player Leaderboards + Early Game side by side
@@ -547,14 +547,14 @@ with tabs[2]:
             with col_lb:
                 st.plotly_chart(
                     charts.chart_player_leaderboard(all_ps, role_map),
-                    use_container_width=True,
+                    width="stretch",
                 )
             with col_eg:
                 early = _early_game(DB, sid)
                 if not early.empty:
                     st.plotly_chart(
                         charts.chart_early_game(early, team_colors_map),
-                        use_container_width=True,
+                        width="stretch",
                     )
 
             # Draft Diversity
@@ -562,7 +562,7 @@ with tabs[2]:
             if not diversity.empty:
                 st.plotly_chart(
                     charts.chart_draft_diversity(diversity, team_colors_map),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             # Item Analytics
@@ -572,12 +572,12 @@ with tabs[2]:
                 with col_built:
                     st.plotly_chart(
                         charts.chart_most_built_items(item_stats),
-                        use_container_width=True,
+                        width="stretch",
                     )
                 with col_wr:
                     st.plotly_chart(
                         charts.chart_item_winrates(item_stats),
-                        use_container_width=True,
+                        width="stretch",
                     )
 
             # Slamurai's Sunfire Counter
@@ -635,17 +635,17 @@ with tabs[3]:
             with col_sc:
                 st.plotly_chart(
                     charts.chart_champion_pickrate_scatter(champ_df, min_games=int(min_games_filter)),
-                    use_container_width=True,
+                    width="stretch",
                 )
             with col_wr:
                 st.plotly_chart(
                     charts.chart_champion_winrates(champ_df, min_games=int(min_games_filter)),
-                    use_container_width=True,
+                    width="stretch",
                 )
             with col_cwr:
                 st.plotly_chart(
                     charts.chart_champion_confidence_winrates(champ_df, min_games=int(min_games_filter)),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             if all_weeks_set and max(all_weeks_set) >= MIN_WEEKS_FOR_TRENDING:
@@ -668,7 +668,7 @@ with tabs[3]:
 
                     st.plotly_chart(
                         charts.chart_trending_champions(all_time_agg, recent_champ_df),
-                        use_container_width=True,
+                        width="stretch",
                     )
 
             if len(data_seasons) > 1:
@@ -677,7 +677,7 @@ with tabs[3]:
                 with col_p:
                     st.plotly_chart(
                         charts.chart_champion_presence(champ_df, presence_df),
-                        use_container_width=True,
+                        width="stretch",
                     )
 
         # Ban analytics (only shown when data exists)
@@ -691,12 +691,12 @@ with tabs[3]:
             with col_bans:
                 st.plotly_chart(
                     charts.chart_ban_rates(ban_df),
-                    use_container_width=True,
+                    width="stretch",
                 )
             with col_overlap:
                 st.plotly_chart(
                     charts.chart_ban_overlap(ban_df, champ_df),
-                    use_container_width=True,
+                    width="stretch",
                 )
         else:
             st.caption("Ban data not yet available for these seasons.")
@@ -725,7 +725,7 @@ with tabs[4]:
             standings = salary_seeding(_teams(DB, sid))
             st.plotly_chart(
                 charts.chart_elo_standings(standings, team_colors_map),
-                use_container_width=True,
+                width="stretch",
             )
             st.caption("Elo values derived from team salary totals. "
                        "Will update to real Elo once games are played.")
@@ -745,7 +745,7 @@ with tabs[4]:
                 st.plotly_chart(
                     charts.chart_elo_standings_with_delta(
                         standings, prev_standings, team_colors_map),
-                    use_container_width=True,
+                    width="stretch",
                 )
             with col_tbl:
                 tbl = standings[["name", "elo", "games_played"]].copy()
@@ -768,7 +768,7 @@ with tabs[4]:
                 tbl = tbl.rename(columns={
                     "name": "Team", "elo": "Rating", "games_played": "Games"
                 })
-                st.dataframe(tbl, use_container_width=True, hide_index=True)
+                st.dataframe(tbl, width="stretch", hide_index=True)
 
             # History chart
             if not history.empty:
@@ -781,7 +781,7 @@ with tabs[4]:
                 )
                 st.plotly_chart(
                     charts.chart_elo_history(history, team_colors_map, visible_teams=visible),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
         st.markdown(gold_divider(), unsafe_allow_html=True)
@@ -912,7 +912,7 @@ with tabs[5]:
                     )
                     st.plotly_chart(
                         charts.chart_win_probability(t1, t2, prob_a, c1, c2),
-                        use_container_width=True,
+                        width="stretch",
                         key=f"wp_{sid}_{wk}_{row['seriesId']}",
                     )
 

@@ -3,7 +3,7 @@ name: Sync Database
 on:
   schedule:
     # Run at 4 AM UTC daily (11 PM ET / 8 PM PT)
-    - cron: '0 4 * * *'
+    - cron: '0 10 * * *'
   workflow_dispatch:  # Allow manual trigger from GitHub UI
 
 jobs:

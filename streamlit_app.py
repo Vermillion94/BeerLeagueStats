@@ -24,6 +24,7 @@ from app.data_loader import (
 )
 from app.elo import compute_elo_through_week, salary_seeding, win_probability, STARTING_ELO
 from app.impact_factor import compute_impact_factors, player_of_the_week, weight_breakdown
+from app import playoff
 from app.config import (
     UPSET_THRESHOLD, CLOSE_MATCHUP_THRESHOLD, DEFAULT_RD,
     CHAMP_MIN_GAMES_DEFAULT, CHAMP_MIN_GAMES_MAX,
@@ -133,6 +134,31 @@ def _peak_ranks(db):
     return load_peak_ranks(db)
 
 
+@st.cache_data
+def _playoff_sim(db, sid, through_week, n_sims):
+    """Cached Monte Carlo playoff simulation for a season."""
+    teams = _teams(db, sid)
+    name_map = dict(zip(teams["teamId"].astype(str), teams["name"]))
+
+    if season_has_data(db, sid):
+        standings, _ = _elo(db, sid, through_week)
+        rating_map = dict(zip(standings["team_id"].astype(str), standings["elo"]))
+        rd_map = dict(zip(standings["team_id"].astype(str), standings["rd"]))
+        rating_label = "Glicko-2"
+    else:
+        sal = salary_seeding(teams)
+        rating_map = dict(zip(sal["team_id"].astype(str), sal["elo"]))
+        rd_map = dict(zip(sal["team_id"].astype(str), sal["rd"]))
+        rating_label = "Salary seed"
+
+    series = _all_series(db, sid)
+    team_ids = list(name_map.keys())
+    sim = playoff.simulate(series, rating_map, rd_map, team_ids, n_sims=n_sims)
+    sim["name_map"] = name_map
+    sim["rating_label"] = rating_label
+    return sim
+
+
 # -- Helper: build team color map ----------------------------------------------
 
 def _build_team_colors(db, sid):
@@ -226,7 +252,7 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════════════════
 
 TAB_NAMES = ["WEEKLY RECAP", "PLAYER OF THE WEEK", "SEASON OVERVIEW",
-             "CHAMPION ANALYTICS", "POWER RANKINGS", "MATCHUPS"]
+             "CHAMPION ANALYTICS", "POWER RANKINGS", "MATCHUPS", "PLAYOFF OUTLOOK"]
 tabs = st.tabs(TAB_NAMES)
 
 
@@ -942,3 +968,165 @@ with tabs[5]:
                 _render_league_week(active_sids[0], wk)
 
         st.markdown(gold_divider(), unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# TAB 7 — PLAYOFF OUTLOOK
+# ---------------------------------------------------------------------------
+
+with tabs[6]:
+    st.markdown(
+        broadcast_header(
+            "Playoff Outlook",
+            "Top 8 — Monte Carlo Seed Probabilities",
+        ),
+        unsafe_allow_html=True,
+    )
+
+    st.caption(
+        "Each remaining best-of-3 is rolled 8,000 times using current Glicko-2 "
+        "ratings (BO3 win probability = p²·(3 − 2p)). Tiebreakers: head-to-head "
+        "series record for 2-way ties; overall record within the tying group, "
+        "then head-to-head for 3+ way ties."
+    )
+
+    po_active_sids = [
+        sid for sid in SEL_IDS
+        if active_seasons[active_seasons["id"] == sid].iloc[0]["status"] == "ACTIVE"
+    ]
+
+    if not po_active_sids:
+        st.info("Playoff outlook is only shown for active seasons.")
+    else:
+        for sid in po_active_sids:
+            season_row = active_seasons[active_seasons["id"] == sid].iloc[0]
+            div = "Lite" if "lite" in season_row["name"].lower() else "Stout"
+            badge = league_badge(div)
+            st.markdown(section_header(season_row["name"], badge),
+                        unsafe_allow_html=True)
+
+            through_wk = elo_max_week or (
+                max(_completed_weeks(DB, sid)) if season_has_data(DB, sid) else 0
+            )
+            sim = _playoff_sim(DB, sid, through_wk, 8000)
+            name_map = sim["name_map"]
+            n_remaining = len(sim["remaining"])
+
+            # ── Scenario pinning UI ───────────────────────────────────────
+            scenarios = []
+            scenario_labels = []
+            if n_remaining > 0:
+                with st.expander(
+                    f"What if? Pin specific outcomes "
+                    f"({n_remaining} series remaining)",
+                    expanded=False,
+                ):
+                    st.caption(
+                        "Pin one or more remaining series to a winner. Probabilities "
+                        "below recompute over only the simulations matching every pin."
+                    )
+
+                    # Group by week for cleaner UI
+                    by_week = {}
+                    for idx, r in enumerate(sim["remaining"]):
+                        by_week.setdefault(r["week"], []).append((idx, r))
+
+                    for wk in sorted(by_week):
+                        st.markdown(f"**Week {wk}**")
+                        for idx, r in by_week[wk]:
+                            t1, t2 = r["t1Name"], r["t2Name"]
+                            p1 = r["p_t1"]
+                            label = (
+                                f"{t1} vs {t2}  "
+                                f"({t1}: {p1*100:.0f}% / {t2}: {(1-p1)*100:.0f}%)"
+                            )
+                            choice = st.radio(
+                                label,
+                                options=["— no pin —", t1, t2],
+                                horizontal=True,
+                                key=f"po_{sid}_{r['seriesId']}",
+                                label_visibility="visible",
+                            )
+                            if choice == t1:
+                                scenarios.append((idx, r["t1Id"]))
+                                scenario_labels.append(f"{t1} beats {t2} (W{wk})")
+                            elif choice == t2:
+                                scenarios.append((idx, r["t2Id"]))
+                                scenario_labels.append(f"{t2} beats {t1} (W{wk})")
+
+            # Apply scenario filter
+            mask = playoff.apply_scenarios(sim, scenarios) if scenarios else None
+            n_kept = int(mask.sum()) if mask is not None else sim["n_sims"]
+            if scenarios:
+                pct_kept = n_kept / sim["n_sims"] * 100
+                st.markdown(
+                    f'<div style="color:{ACCENT_GOLD};font-family:Oswald,sans-serif;'
+                    f'font-size:0.9rem;letter-spacing:1px;margin:0.4rem 0">'
+                    f'PINNED: {", ".join(scenario_labels)}'
+                    f'<span style="color:{TEXT_MUTED};margin-left:1rem">'
+                    f'({n_kept:,} of {sim["n_sims"]:,} sims match — {pct_kept:.1f}%)'
+                    f'</span></div>',
+                    unsafe_allow_html=True,
+                )
+                if n_kept < 100:
+                    st.warning(
+                        f"Only {n_kept} simulations match these pins — "
+                        f"probabilities below are noisy. Consider unpinning some."
+                    )
+
+            probs = playoff.seed_probabilities(sim, mask)
+            if probs.empty:
+                st.warning("No simulations match the pinned scenarios.")
+                st.markdown(gold_divider(), unsafe_allow_html=True)
+                continue
+
+            # ── Standings (current) + Make Playoffs bar ───────────────────
+            col_st, col_mk = st.columns([2, 3])
+
+            with col_st:
+                st.markdown(
+                    f'<div style="color:{ACCENT_GOLD};font-family:Oswald,sans-serif;'
+                    f'font-size:1rem;letter-spacing:2px;margin-bottom:0.3rem">'
+                    f'CURRENT STANDINGS</div>',
+                    unsafe_allow_html=True,
+                )
+                cur_tbl = playoff.standings_table(sim, name_map)
+                cur_tbl["Record"] = cur_tbl.apply(
+                    lambda r: f"{r['wins']}-{r['losses']}", axis=1)
+                cur_tbl["Status"] = cur_tbl["seed"].apply(
+                    lambda s: "PLAYOFF" if s <= playoff.PLAYOFF_SPOTS else "OUT")
+                show = cur_tbl.rename(columns={"seed": "Seed", "team": "Team"})[
+                    ["Seed", "Team", "Record", "Status"]
+                ]
+                st.dataframe(show, width="stretch", hide_index=True)
+
+            with col_mk:
+                st.plotly_chart(
+                    charts.chart_make_playoffs_bar(probs, name_map),
+                    width="stretch",
+                    key=f"po_mk_{sid}",
+                )
+
+            # ── Seed heatmap ──────────────────────────────────────────────
+            st.plotly_chart(
+                charts.chart_playoff_heatmap(probs, name_map),
+                width="stretch",
+                key=f"po_heat_{sid}",
+            )
+
+            # ── Per-team deep dive ────────────────────────────────────────
+            with st.expander("Per-team seed distribution", expanded=False):
+                team_choice = st.selectbox(
+                    "Team",
+                    options=list(name_map.keys()),
+                    format_func=lambda tid: name_map.get(tid, tid),
+                    key=f"po_team_{sid}",
+                )
+                st.plotly_chart(
+                    charts.chart_playoff_seed_distribution(
+                        probs, name_map, team_choice),
+                    width="stretch",
+                    key=f"po_dist_{sid}",
+                )
+
+            st.markdown(gold_divider(), unsafe_allow_html=True)

@@ -2715,4 +2715,143 @@ def generate_team_identity_notes(records_df: pd.DataFrame) -> list[dict]:
                 "all_identities": identities,
             })
 
+
+# ════════════════════════════════════════════════════════════════════════════
+# PLAYOFF OUTLOOK
+# ════════════════════════════════════════════════════════════════════════════
+
+def chart_playoff_heatmap(probs_df: pd.DataFrame, name_map: dict,
+                          playoff_spots: int = 8) -> go.Figure:
+    """Heatmap of P(seed = k) per team. Rows sorted by avg seed (best on top)."""
+    if probs_df.empty:
+        return _base("Playoff Seed Probabilities")
+
+    df = probs_df.copy()
+    df["team"] = df["team_id"].map(name_map).fillna(df["team_id"])
+    df = df.sort_values("avg_seed", ascending=True).reset_index(drop=True)
+
+    seed_cols = [f"seed_{k}" for k in range(1, playoff_spots + 1)]
+    col_labels = [f"Seed {k}" for k in range(1, playoff_spots + 1)] + ["Miss"]
+    z = df[seed_cols + ["miss"]].to_numpy() * 100.0
+    teams = df["team"].tolist()
+
+    text = [[f"{v:.0f}%" if v >= 1 else "" for v in row] for row in z]
+
+    fig = _base("Playoff Seed Probabilities",
+                height=max(280, 36 * len(teams) + 90))
+    fig.add_trace(go.Heatmap(
+        z=z, x=col_labels, y=teams,
+        colorscale=[
+            [0.0, "rgba(15,23,42,0.0)"],
+            [0.05, "#1e293b"],
+            [0.25, ACCENT_BLUE],
+            [0.55, ACCENT_TEAL],
+            [0.85, ACCENT_GOLD],
+            [1.0, "#fff7c2"],
+        ],
+        zmin=0, zmax=100,
+        text=text, texttemplate="%{text}",
+        textfont=dict(size=12, family="Oswald, sans-serif", color="#0b0f17"),
+        hovertemplate="<b>%{y}</b><br>%{x}: %{z:.1f}%<extra></extra>",
+        colorbar=dict(
+            title=dict(text="Probability", font=dict(size=11, color=TEXT_MUTED)),
+            ticksuffix="%", tickfont=dict(size=10, color=TEXT_MUTED),
+            thickness=10, len=0.7,
+        ),
+        xgap=2, ygap=2,
+    ))
+    fig.update_layout(
+        xaxis=dict(side="top", tickfont=dict(size=12, color=TEXT_SEC)),
+        yaxis=dict(autorange="reversed", tickfont=dict(size=13, color=TEXT_MAIN)),
+        margin=dict(l=10, r=10, t=80, b=10),
+    )
+    return fig
+
+
+def chart_make_playoffs_bar(probs_df: pd.DataFrame, name_map: dict,
+                            team_colors: dict = None) -> go.Figure:
+    """Horizontal bar of P(make playoffs) per team."""
+    if probs_df.empty:
+        return _base("Playoff Odds")
+
+    df = probs_df.copy()
+    df["team"] = df["team_id"].map(name_map).fillna(df["team_id"])
+    df = df.sort_values("make_playoffs", ascending=True).reset_index(drop=True)
+
+    pct = df["make_playoffs"] * 100
+    colors = []
+    for tid, p in zip(df["team_id"], df["make_playoffs"]):
+        if p >= 0.999:
+            colors.append(ACCENT_GOLD)
+        elif p >= 0.50:
+            colors.append(ACCENT_TEAL)
+        elif p >= 0.10:
+            colors.append(ACCENT_BLUE)
+        else:
+            colors.append(LOSS_COLOR)
+
+    text = [
+        "CLINCHED" if p >= 0.999 else
+        "ELIMINATED" if p <= 0.001 else f"{p*100:.1f}%"
+        for p in df["make_playoffs"]
+    ]
+
+    fig = _base("Make Playoffs (%)", height=max(260, 34 * len(df) + 60))
+    fig.add_trace(go.Bar(
+        y=df["team"], x=pct, orientation="h",
+        marker_color=colors, marker_line_width=0, opacity=0.92,
+        text=text, textposition="outside",
+        textfont=dict(size=13, family="Oswald, sans-serif", color=TEXT_MAIN),
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "Make playoffs: %{x:.1f}%<br>"
+            "Avg final seed: %{customdata[0]:.1f}<br>"
+            "Avg final wins: %{customdata[1]:.1f}<extra></extra>"
+        ),
+        customdata=list(zip(df["avg_seed"], df["avg_wins"])),
+    ))
+    fig.update_layout(
+        xaxis=dict(range=[0, 115], showticklabels=False, showgrid=False),
+        yaxis=dict(tickfont=dict(size=13, color=TEXT_MAIN)),
+        margin=dict(l=10, r=70, t=56, b=10),
+        showlegend=False,
+    )
+    return fig
+
+
+def chart_playoff_seed_distribution(probs_df: pd.DataFrame, name_map: dict,
+                                    team_id: str, playoff_spots: int = 8) -> go.Figure:
+    """Vertical bar of P(seed=k) for a single team across all seed slots."""
+    row = probs_df[probs_df["team_id"] == team_id]
+    if row.empty:
+        return _base("Seed Distribution")
+    row = row.iloc[0]
+    name = name_map.get(team_id, team_id)
+
+    labels = [f"#{k}" for k in range(1, playoff_spots + 1)] + ["Miss"]
+    values = [row[f"seed_{k}"] * 100 for k in range(1, playoff_spots + 1)]
+    values.append(row["miss"] * 100)
+
+    colors = [ACCENT_GOLD if k <= 4 else ACCENT_TEAL
+              for k in range(1, playoff_spots + 1)] + [LOSS_COLOR]
+
+    fig = _base(f"{name} — Final Seed Probabilities", height=320)
+    fig.add_trace(go.Bar(
+        x=labels, y=values,
+        marker_color=colors, marker_line_width=0, opacity=0.92,
+        text=[f"{v:.0f}%" if v >= 1 else "" for v in values],
+        textposition="outside",
+        textfont=dict(size=13, family="Oswald, sans-serif", color=TEXT_MAIN),
+        hovertemplate="<b>%{x}</b>: %{y:.1f}%<extra></extra>",
+    ))
+    fig.update_layout(
+        yaxis=dict(range=[0, max(values) * 1.18], showticklabels=False,
+                   showgrid=False),
+        xaxis=dict(tickfont=dict(size=13, family="Oswald, sans-serif",
+                                 color=TEXT_SEC)),
+        margin=dict(l=10, r=10, t=56, b=30),
+        showlegend=False,
+    )
+    return fig
+
     return notes

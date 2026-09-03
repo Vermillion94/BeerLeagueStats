@@ -1,9 +1,14 @@
 """
 Beer League Stats — Impact Factor (Player of the Week)
 
-Composite 0-100 score normalized within the week's player pool.
-Balanced across roles: carries earn it through damage and kills,
-supports/tanks earn it through CC, shielding, and objective play.
+Composite 0-100 score. Each metric is PERCENTILE-normalized WITHIN ROLE
+(2026-09 rework): a support's CC/min is compared against other supports,
+a mid laner's damage share against other mids. The previous whole-pool
+min-max version was measured across seasons 5-6: supports were 19% of the
+player pool but 2% of top-5 finishes and won POTW zero times in 19 weeks —
+"balanced across roles" was aspiration, not fact. Percentiles also stop a
+single outlier game from compressing everyone else's range.
+
 Win bonus applied before final normalization.
 """
 import numpy as np
@@ -37,6 +42,19 @@ def _safe_normalize(series: pd.Series) -> pd.Series:
     if mx == mn:
         return pd.Series(0.5, index=series.index)
     return (series - mn) / (mx - mn)
+
+
+def _role_percentile(df: pd.DataFrame, series: pd.Series) -> pd.Series:
+    """Percentile rank of each value WITHIN its role group (0-1].
+
+    Robust to outliers (rank-based) and role-fair (supports compete with
+    supports). Rows without a position fall into their own group.
+    """
+    if "position" in df.columns:
+        roles = df["position"].fillna("UNKNOWN").replace("", "UNKNOWN")
+    else:
+        roles = pd.Series("UNKNOWN", index=df.index)
+    return series.groupby(roles).rank(pct=True)
 
 
 def _safe_col(df: pd.DataFrame, col: str) -> pd.Series:
@@ -107,17 +125,17 @@ def compute_impact_factors(player_stats_df: pd.DataFrame) -> pd.DataFrame:
     saves = _safe_col(df, "saveAllyFromDeath")
     df["support_value_per_min"] = (shields + heals) / game_mins + saves * 50
 
-    # ── Normalize each metric within this pool ──
-    df["_n_kp"]      = _safe_normalize(df["killParticipation"])
-    df["_n_dmg"]     = _safe_normalize(df["teamDamagePercentage"])
-    df["_n_kda"]     = _safe_normalize(df["kda"])
-    df["_n_vision"]  = _safe_normalize(df["vision_per_min"])
-    df["_n_solo"]    = _safe_normalize(df["soloKills"].fillna(0))
-    df["_n_cs"]      = _safe_normalize(df["cs_per_min"])
-    df["_n_multi"]   = _safe_normalize(df["multi_kill_bonus"])
-    df["_n_play"]    = _safe_normalize(df["playmaking"])
-    df["_n_obj"]     = _safe_normalize(df["objective_dmg_per_min"])
-    df["_n_support"] = _safe_normalize(df["support_value_per_min"])
+    # ── Normalize each metric within ROLE (percentile rank) ──
+    df["_n_kp"]      = _role_percentile(df, df["killParticipation"])
+    df["_n_dmg"]     = _role_percentile(df, df["teamDamagePercentage"])
+    df["_n_kda"]     = _role_percentile(df, df["kda"])
+    df["_n_vision"]  = _role_percentile(df, df["vision_per_min"])
+    df["_n_solo"]    = _role_percentile(df, df["soloKills"].fillna(0))
+    df["_n_cs"]      = _role_percentile(df, df["cs_per_min"])
+    df["_n_multi"]   = _role_percentile(df, df["multi_kill_bonus"])
+    df["_n_play"]    = _role_percentile(df, df["playmaking"])
+    df["_n_obj"]     = _role_percentile(df, df["objective_dmg_per_min"])
+    df["_n_support"] = _role_percentile(df, df["support_value_per_min"])
 
     df["if_raw"] = (
         WEIGHTS["kill_participation"] * df["_n_kp"] +
@@ -170,7 +188,10 @@ def player_of_the_week(player_stats_df: pd.DataFrame) -> pd.DataFrame:
 
     id_col = "summonerId" if "summonerId" in df.columns else "username"
 
-    agg = df.groupby([id_col, "riotId", "username", "championName"]).agg(
+    # Aggregate per PLAYER across all their games (2026-09: the old
+    # per-champion grouping silently discarded a two-champ week's minority
+    # games); championName shown is the most-played champion of the week.
+    agg = df.groupby([id_col, "riotId", "username"]).agg(
         games=("impact_factor", "count"),
         wins=("win", "sum"),
         avg_if=("impact_factor", "mean"),
@@ -182,17 +203,22 @@ def player_of_the_week(player_stats_df: pd.DataFrame) -> pd.DataFrame:
         avg_cs_per_min=("cs_per_min", "mean"),
     ).reset_index()
 
-    # One row per player: keep the champion with most games, then highest avg_if
-    agg = agg.sort_values(
-        [id_col, "games", "avg_if"], ascending=[True, False, False]
+    modal_champ = (
+        df.groupby(id_col)["championName"]
+        .agg(lambda s: s.mode().iloc[0])
+        .rename("championName")
     )
-    agg = agg.drop_duplicates(subset=id_col, keep="first")
+    agg = agg.merge(modal_champ, left_on=id_col, right_index=True)
 
     return agg.sort_values("avg_if", ascending=False).head(5).reset_index(drop=True)
 
 
 def weight_breakdown() -> list:
-    """Return human-readable weight breakdown for the formula expander."""
+    """Return human-readable weight breakdown for the formula expander.
+
+    Note shown to users: every metric is percentile-ranked WITHIN ROLE, so
+    a support's playmaking is judged against other supports, not mid laners.
+    """
     rows = [
         ("Kill Participation", "24%", "Universal carry signal — were you in every fight?"),
         ("KDA (capped x15)",   "16%", "Classic metric, capped to limit deathless outliers"),

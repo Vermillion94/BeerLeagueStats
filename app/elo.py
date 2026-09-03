@@ -1,22 +1,21 @@
 """
-Beer League Stats — Bayesian Glicko-2 Rating Engine (with retrodiction)
+Beer League Stats — Glicko-2 Rating Engine (chess-style ladder)
 
-Full Bayesian approach: Glicko-2 tracks rating, uncertainty (RD), and
-volatility per team, then iterative convergence re-simulates the season
-multiple times so that early wins against eventually-strong teams are
-properly credited retroactively.
+Teams start at salary-seeded ratings (their "preseason ranking", 1100-1300)
+and then every game moves the ladder: Glicko-2 per-game updates, where
+beating a higher-rated opponent gains more and losing to a lower-rated one
+costs more — the fun, chess-like behavior the owner wants (2026-09).
 
-Each pass:
-  1. Seed teams with the previous pass's final ratings (pass 0 uses salary)
-  2. Run all games through Glicko-2 (per-game updates, not per-series)
-  3. Record final ratings
+The old retrodiction mode (re-simulating the season to convergence) is
+GONE: a 2026-09 walk-forward backtest on seasons 5-6 showed it reprocessed
+the same games up to 6x with tightening priors, which spread ratings far
+beyond what the data supports — its "80%" predictions hit 64%, and its
+Brier score was worse than a coin flip. Single-pass Glicko keeps the
+per-game drama without the silent history rewriting.
 
-Repeat until ratings converge (< 1.0 rating point change across all teams).
-Typically converges in 3-5 passes with ~168 games.
-
-Salary prior: teams start at salary-seeded ratings (1100-1300) with moderate
-RD. On subsequent passes, they start at converged ratings with fresh RD —
-the system naturally discovers true strength regardless of salary.
+Probabilities derived from the ladder are SHRUNK toward 50%
+(PROB_SHRINK, fit on the same backtest) so matchup odds and playoff sims
+say "62%" when they mean 62% — the ladder itself stays untouched.
 
 NULL-week matches are excluded (pre-season series 100-106).
 """
@@ -25,8 +24,6 @@ import math
 from dataclasses import dataclass, field
 
 import pandas as pd
-
-from app.config import ANCHOR_GAMES, MIN_GAMES_FOR_RETRO
 
 # -- Public constants (backward-compatible names) -----------------------------
 
@@ -42,10 +39,12 @@ _CONV_TOL = 1e-6                 # Illinois algorithm tolerance
 _MAX_ITER = 100                  # Illinois algorithm max iterations
 _SCALE = 173.7178                # 400 / ln(10), Glicko-2 scaling factor
 
-# -- Retrodiction settings ---------------------------------------------------
+# -- Probability calibration -------------------------------------------------
+# Backtest (2026-09, seasons 5-6 walk-forward): raw Glicko log-odds are ~2x
+# too extreme at league sample sizes. Displayed/simulated probabilities are
+# shrunk toward 50% by this factor; the LADDER ratings are never shrunk.
 
-RETRO_PASSES = 6                 # max convergence passes
-RETRO_THRESHOLD = 10.0           # converged when max delta < this
+PROB_SHRINK = 0.5
 
 # -- Salary seeding range ----------------------------------------------------
 
@@ -114,12 +113,14 @@ def _new_volatility(sigma, phi, v, delta):
 
 # ── Public: win probability ─────────────────────────────────────────────────
 
-def win_probability(rating_a, rating_b, rd_a=None, rd_b=None):
+def win_probability(rating_a, rating_b, rd_a=None, rd_b=None, shrink=PROB_SHRINK):
     """
-    Win probability for team A (0.0-1.0).
+    Win probability for team A (0.0-1.0), calibrated for display.
 
-    When RDs are provided, high uncertainty pulls the prediction toward 50-50.
-    Backward-compatible: win_probability(elo_a, elo_b) still works.
+    When RDs are provided, high uncertainty pulls the prediction toward
+    50-50. The result is additionally shrunk toward 50% by `shrink`
+    (backtest-fit — see PROB_SHRINK; pass shrink=1.0 for the raw Glicko
+    expectation). Backward-compatible: win_probability(elo_a, elo_b) works.
     """
     if rd_a is None:
         rd_a = 60.0
@@ -130,7 +131,33 @@ def win_probability(rating_a, rating_b, rd_a=None, rd_b=None):
     mu_b, phi_b = _to_g2(rating_b, rd_b)
 
     combined_phi = math.sqrt(phi_a ** 2 + phi_b ** 2)
-    return 1.0 / (1.0 + math.exp(-_g(combined_phi) * (mu_a - mu_b)))
+    p = 1.0 / (1.0 + math.exp(-_g(combined_phi) * (mu_a - mu_b)))
+    return 0.5 + shrink * (p - 0.5)
+
+
+def series_win_probability(p_game: float, fmt: str) -> float | None:
+    """P(win the series) from per-game probability, by series format.
+
+    BEST_OF_1 → p; BEST_OF_3 → p²(3−2p); BEST_OF_5 → p³(10−15p+6p²).
+    BEST_OF_2 returns None — a Bo2 has a DRAW outcome, so a single "series
+    win probability" misleads; callers should show the per-game number
+    (bo2_outcome_probs gives the full 2-0 / 1-1 / 0-2 split).
+    """
+    f = (fmt or "").upper()
+    if f == "BEST_OF_3":
+        return p_game * p_game * (3.0 - 2.0 * p_game)
+    if f == "BEST_OF_5":
+        p = p_game
+        return p ** 3 * (10.0 - 15.0 * p + 6.0 * p * p)
+    if f == "BEST_OF_2":
+        return None
+    return p_game  # BEST_OF_1 / unknown
+
+
+def bo2_outcome_probs(p_game: float) -> tuple[float, float, float]:
+    """(P 2-0, P 1-1 draw, P 0-2) for a Bo2 with independent games."""
+    q = 1.0 - p_game
+    return p_game * p_game, 2.0 * p_game * q, q * q
 
 
 # ── Team state ──────────────────────────────────────────────────────────────
@@ -282,7 +309,7 @@ def _run_pass(game_list, team_names, seed_ratings=None, team_salaries=None,
     return teams, history_records
 
 
-# ── Main computation (with retrodiction) ────────────────────────────────────
+# ── Main computation ────────────────────────────────────────────────────────
 
 def compute_elo_through_week(
     matches_df: pd.DataFrame,
@@ -291,9 +318,8 @@ def compute_elo_through_week(
     team_salaries: dict = None,
 ) -> tuple:
     """
-    Full Bayesian retrodiction: run Glicko-2 forward passes iteratively
-    until ratings converge, so early wins against eventually-strong teams
-    are properly valued.
+    Salary-seeded single-pass Glicko-2 ladder through the given week.
+    Every game moves the ratings; upsets move them more (chess-style).
 
     Parameters
     ----------
@@ -325,85 +351,32 @@ def compute_elo_through_week(
         ))
 
     if not game_list:
-        # No games — return salary-seeded or empty standings
+        # No games yet — salary-seeded standings (used to return a flat 1200,
+        # which made week-1 upset detection blind)
+        sals = list(team_salaries.values()) if team_salaries else []
+        min_sal, max_sal = (min(sals), max(sals)) if sals else (0, 0)
         rows = []
         for tid, name in team_names.items():
+            sal = (team_salaries or {}).get(tid, 0)
+            r = _salary_to_rating(sal, min_sal, max_sal) if sal else STARTING_ELO
+            rd = SALARY_INITIAL_RD if sal else STARTING_RD
             rows.append({
                 "team_id": tid, "name": name,
-                "elo": STARTING_ELO, "rd": STARTING_RD, "games_played": 0,
+                "elo": round(r, 1), "rd": rd, "games_played": 0,
             })
         return (
             pd.DataFrame(rows).sort_values("elo", ascending=False).reset_index(drop=True),
             pd.DataFrame(),
         )
 
-    # Pass 0: salary-seeded
+    # One forward pass: salary-seeded start, then honest per-game movement.
+    # No retrodiction (double-counted evidence → overconfident, backtested
+    # worse than a coin flip) and no anchor-blend (it flattened the trend
+    # chart onto the salary line — the ladder should MOVE; owner 2026-09).
+    # The salary prior still matters twice: it seeds the starting ratings,
+    # and SALARY_INITIAL_RD keeps early swings from being totally unhinged.
     teams, history = _run_pass(game_list, team_names,
                                team_salaries=team_salaries)
-    prev_ratings = {tid: t.rating for tid, t in teams.items()}
-
-    # Only run retrodiction when we have enough data for it to be meaningful.
-    # With < 30 total games (~2 weeks of Bo3), retrodiction amplifies noise.
-    # Scale number of passes by data volume.
-    n_games = len(game_list)
-    effective_passes = 0 if n_games < MIN_GAMES_FOR_RETRO else min(RETRO_PASSES, 2 + n_games // 40)
-
-    for pass_num in range(1, effective_passes):
-        teams, history = _run_pass(game_list, team_names,
-                                   seed_ratings=prev_ratings,
-                                   pass_number=pass_num)
-        new_ratings = {tid: t.rating for tid, t in teams.items()}
-
-        max_delta = max(
-            abs(new_ratings.get(tid, STARTING_ELO) - prev_ratings.get(tid, STARTING_ELO))
-            for tid in set(prev_ratings) | set(new_ratings)
-        )
-        prev_ratings = new_ratings
-
-        if max_delta < RETRO_THRESHOLD:
-            break
-
-    # Early-season salary anchor: blend match-based rating with salary prior.
-    # This prevents wild swings when only a few games have been played.
-    # The blend fades linearly: at 0 games = 100% salary, at ANCHOR_GAMES = 0%.
-    if team_salaries:
-        sals = list(team_salaries.values())
-        min_sal = min(sals) if sals else 0
-        max_sal = max(sals) if sals else 0
-        for tid, t in teams.items():
-            sal = team_salaries.get(tid, 0)
-            if sal:
-                salary_rating = _salary_to_rating(sal, min_sal, max_sal)
-                weight = max(0.0, 1.0 - t.games / ANCHOR_GAMES)
-                t.rating = weight * salary_rating + (1.0 - weight) * t.rating
-
-        # Apply the same anchor to history so the trend chart matches standings.
-        # For each week snapshot, blend based on games played up to that point.
-        if history:
-            # Count games per team per week from the game list
-            games_at_week = {}  # (tid, week) -> cumulative games
-            game_counts = {}    # tid -> running count
-            current_wk = None
-            for week, _, _, t1, t2, _ in game_list:
-                if week != current_wk:
-                    if current_wk is not None:
-                        for tid in game_counts:
-                            games_at_week[(tid, current_wk)] = game_counts[tid]
-                    current_wk = week
-                game_counts[t1] = game_counts.get(t1, 0) + 1
-                game_counts[t2] = game_counts.get(t2, 0) + 1
-            if current_wk is not None:
-                for tid in game_counts:
-                    games_at_week[(tid, current_wk)] = game_counts[tid]
-
-            for rec in history:
-                tid = rec["team_id"]
-                sal = team_salaries.get(tid, 0)
-                if sal and rec["week"] > 0:
-                    salary_r = _salary_to_rating(sal, min_sal, max_sal)
-                    g = games_at_week.get((tid, rec["week"]), 0)
-                    w = max(0.0, 1.0 - g / ANCHOR_GAMES)
-                    rec["elo"] = round(w * salary_r + (1.0 - w) * rec["elo"], 1)
 
     # Build standings
     rows = []

@@ -18,11 +18,14 @@ from app.data_loader import (
     load_all_completed_matches, load_all_completed_matches_named,
     load_all_player_stats, load_head_to_head,
     load_champion_stats, load_champion_presence, load_upcoming_series,
-    load_all_series, load_ban_stats, load_peak_ranks,
+    load_all_series, load_ban_stats, load_peak_ranks, load_playoff_spots,
     load_role_mapping, load_team_records, load_draft_diversity, load_early_game_stats,
     load_item_stats, load_sunfire_stats,
 )
-from app.elo import compute_elo_through_week, salary_seeding, win_probability, STARTING_ELO
+from app.elo import (
+    compute_elo_through_week, salary_seeding, series_win_probability,
+    win_probability, STARTING_ELO,
+)
 from app.impact_factor import compute_impact_factors, player_of_the_week, weight_breakdown
 from app import playoff
 from app.config import (
@@ -737,7 +740,7 @@ with tabs[3]:
 
 with tabs[4]:
     st.markdown(
-        broadcast_header("Power Rankings", "Bayesian Glicko-2 Ratings"),
+        broadcast_header("Power Rankings", "Glicko-2 Ladder — Seeded by Salary, Earned on the Rift"),
         unsafe_allow_html=True,
     )
 
@@ -822,7 +825,7 @@ with tabs[4]:
 
 with tabs[5]:
     st.markdown(
-        broadcast_header("Matchups", "Results & Bayesian Predictions"),
+        broadcast_header("Matchups", "Results & Calibrated Win Odds"),
         unsafe_allow_html=True,
     )
 
@@ -840,33 +843,40 @@ with tabs[5]:
         st.info("No active seasons selected. This tab shows matchups for in-progress seasons.")
     else:
         # Pre-load data for each active season
-        _mu_data = {}  # sid -> {series_df, team_colors, rating_map, rd_map, rating_label, div, name}
+        _mu_data = {}  # sid -> {series_df, team_colors, use_elo, div, name}
         all_weeks = set()
         for sid in active_sids:
             season_row = active_seasons[active_seasons["id"] == sid].iloc[0]
             div = "Lite" if "lite" in season_row["name"].lower() else "Stout"
             series_df = _all_series(DB, sid)
             team_colors_map = _build_team_colors(DB, sid)
-
-            if seeding_method == "Elo (if available)" and season_has_data(DB, sid):
-                through_week = max(_completed_weeks(DB, sid))
-                standings_up, _ = _elo(DB, sid, through_week)
-                rating_map = dict(zip(standings_up["team_id"].astype(str), standings_up["elo"]))
-                rd_map = dict(zip(standings_up["team_id"].astype(str), standings_up["rd"]))
-                rating_label = "Glicko-2"
-            else:
-                sal_standings = salary_seeding(_teams(DB, sid))
-                rating_map = dict(zip(sal_standings["team_id"].astype(str), sal_standings["elo"]))
-                rd_map = dict(zip(sal_standings["team_id"].astype(str), sal_standings["rd"]))
-                rating_label = "Salary seed"
-
             _mu_data[sid] = {
                 "series": series_df, "colors": team_colors_map,
-                "ratings": rating_map, "rds": rd_map,
-                "label": rating_label, "div": div, "name": season_row["name"],
+                "use_elo": (seeding_method == "Elo (if available)"
+                            and season_has_data(DB, sid)),
+                "div": div, "name": season_row["name"],
             }
             if not series_df.empty:
                 all_weeks.update(series_df["week"].dropna().unique())
+
+        def _ratings_asof(sid, before_week):
+            """(rating_map, rd_map, label) using only games BEFORE the given
+            week — upset flags used to judge week-1 wins with end-of-season
+            ratings (hindsight bias, fixed 2026-09). before_week=None uses
+            everything played so far (for scheduled predictions)."""
+            if _mu_data[sid]["use_elo"]:
+                done = _completed_weeks(DB, sid)
+                if before_week is not None:
+                    done = [w for w in done if w < before_week]
+                tw = max(done) if done else 0  # 0 → salary-seeded standings
+                s, _ = _elo(DB, sid, tw)
+                label = "Glicko-2"
+            else:
+                s = salary_seeding(_teams(DB, sid))
+                label = "Salary seed"
+            return (dict(zip(s["team_id"].astype(str), s["elo"])),
+                    dict(zip(s["team_id"].astype(str), s["rd"])),
+                    label)
 
         # Helper to render one league's matchups for a given week
         def _render_league_week(sid, wk):
@@ -881,13 +891,12 @@ with tabs[5]:
 
             completed = week_series[week_series["status"] == "COMPLETED"]
             scheduled = week_series[week_series["status"] == "SCHEDULED"]
-            rating_map = d["ratings"]
-            rd_map = d["rds"]
             team_colors_map = d["colors"]
-            rating_label = d["label"]
 
-            # Completed series: compact matchup cards
+            # Completed series: compact matchup cards. Upset flags use the
+            # ratings AS OF that week (before the games were played).
             if not completed.empty:
+                rating_map, rd_map, _lbl = _ratings_asof(sid, wk)
                 cards_html = ""
                 for _, row in completed.iterrows():
                     t1id, t2id = str(row["team1Id"]), str(row["team2Id"])
@@ -911,8 +920,11 @@ with tabs[5]:
 
                 st.markdown(cards_html, unsafe_allow_html=True)
 
-            # Scheduled series: compact prediction bars
+            # Scheduled series: prediction bars — SERIES probability by
+            # format (Bo3 p²(3−2p) etc.); Bo2 shows the per-game number
+            # because a Bo2 can draw.
             if not scheduled.empty:
+                rating_map, rd_map, rating_label = _ratings_asof(sid, None)
                 for _, row in scheduled.iterrows():
                     t1id, t2id = str(row["team1Id"]), str(row["team2Id"])
                     t1, t2 = row["team1Name"], row["team2Name"]
@@ -920,8 +932,14 @@ with tabs[5]:
                     r2 = rating_map.get(t2id, STARTING_ELO)
                     rd1 = rd_map.get(t1id, DEFAULT_RD)
                     rd2 = rd_map.get(t2id, DEFAULT_RD)
-                    prob_a = win_probability(r1, r2, rd1, rd2)
-                    is_close = CLOSE_MATCHUP_THRESHOLD <= prob_a <= (1.0 - CLOSE_MATCHUP_THRESHOLD)
+                    p_game = win_probability(r1, r2, rd1, rd2)
+                    fmt = str(row.get("format", "") or "")
+                    p_series = series_win_probability(p_game, fmt)
+                    if p_series is None:  # Bo2 — draws possible
+                        prob_a, prob_note = p_game, " · per game (Bo2 can draw)"
+                    else:
+                        prob_a, prob_note = p_series, ""
+                    is_close = CLOSE_MATCHUP_THRESHOLD <= p_game <= (1.0 - CLOSE_MATCHUP_THRESHOLD)
 
                     c1 = team_colors_map.get(t1id, "#3b82f6")
                     c2 = team_colors_map.get(t2id, "#ef4444")
@@ -936,7 +954,7 @@ with tabs[5]:
                         f'font-size:0.8rem;letter-spacing:0.5px;margin-bottom:2px">'
                         f'<b>{t1}</b> vs <b>{t2}</b>  '
                         f'<span style="color:{TEXT_MUTED};font-size:0.7rem">'
-                        f'({rating_label}: {r1:.0f} vs {r2:.0f})</span></div>',
+                        f'({rating_label}: {r1:.0f} vs {r2:.0f}{prob_note})</span></div>',
                         unsafe_allow_html=True,
                     )
                     st.plotly_chart(
@@ -1014,6 +1032,7 @@ with tabs[6]:
             sim = _playoff_sim(DB, sid, through_wk, 8000)
             name_map = sim["name_map"]
             n_remaining = len(sim["remaining"])
+            spots = load_playoff_spots(DB, sid)
 
             # ── Scenario pinning UI ───────────────────────────────────────
             scenarios = []
@@ -1077,7 +1096,7 @@ with tabs[6]:
                         f"probabilities below are noisy. Consider unpinning some."
                     )
 
-            probs = playoff.seed_probabilities(sim, mask)
+            probs = playoff.seed_probabilities(sim, mask, playoff_spots=spots)
             if probs.empty:
                 st.warning("No simulations match the pinned scenarios.")
                 st.markdown(gold_divider(), unsafe_allow_html=True)
@@ -1097,7 +1116,7 @@ with tabs[6]:
                 cur_tbl["Record"] = cur_tbl.apply(
                     lambda r: f"{r['wins']}-{r['losses']}", axis=1)
                 cur_tbl["Status"] = cur_tbl["seed"].apply(
-                    lambda s: "PLAYOFF" if s <= playoff.PLAYOFF_SPOTS else "OUT")
+                    lambda s: "PLAYOFF" if s <= spots else "OUT")
                 show = cur_tbl.rename(columns={"seed": "Seed", "team": "Team"})[
                     ["Seed", "Team", "Record", "Status"]
                 ]
@@ -1112,7 +1131,7 @@ with tabs[6]:
 
             # ── Seed heatmap ──────────────────────────────────────────────
             st.plotly_chart(
-                charts.chart_playoff_heatmap(probs, name_map),
+                charts.chart_playoff_heatmap(probs, name_map, playoff_spots=spots),
                 width="stretch",
                 key=f"po_heat_{sid}",
             )
@@ -1127,7 +1146,7 @@ with tabs[6]:
                 )
                 st.plotly_chart(
                     charts.chart_playoff_seed_distribution(
-                        probs, name_map, team_choice),
+                        probs, name_map, team_choice, playoff_spots=spots),
                     width="stretch",
                     key=f"po_dist_{sid}",
                 )

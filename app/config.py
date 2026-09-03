@@ -61,13 +61,10 @@ ITEM_WINRATE_TOP_N = 20
 
 # ── Elo / Glicko-2 ───────────────────────────────────────────────────────────
 
-ANCHOR_GAMES = 10
-"""Per-team game count at which the salary-prior anchor fades to 0%.
-At 0 games = 100% salary rating, at ANCHOR_GAMES = 100% match rating."""
-
-MIN_GAMES_FOR_RETRO = 15
-"""Minimum total games before retrodiction passes are enabled.
-Below this, noise amplification outweighs the benefit."""
+# ANCHOR_GAMES and MIN_GAMES_FOR_RETRO retired 2026-09: the ladder is a
+# single salary-seeded Glicko pass now (retrodiction backtested worse than a
+# coin flip on Brier; the anchor-blend flattened the trend chart onto the
+# salary line). Probability calibration lives in app/elo.py:PROB_SHRINK.
 
 # ── Broadcast Story Weights ─────────────────────────────────────────────────
 # Base interest scores (0-100) for each story type detected by stories.py.

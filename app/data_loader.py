@@ -72,6 +72,19 @@ def load_all_teams(db_path: str) -> pd.DataFrame:
         return df
 
 
+def load_playoff_spots(db_path: str, season_id, fallback: int = 8) -> int:
+    """The season's configured playoff team count (Season.playoff_teams).
+    2026-09: the playoff sim used to hardcode 8 — S15 Stout runs 12."""
+    with _conn(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT playoff_teams FROM season WHERE id = ?", (str(season_id),))
+        row = cur.fetchone()
+    try:
+        return int(row[0]) if row and row[0] else fallback
+    except (TypeError, ValueError):
+        return fallback
+
+
 def season_has_data(db_path: str, season_id) -> bool:
     """True if the season has at least one COMPLETED match with a non-NULL week."""
     with _conn(db_path) as conn:

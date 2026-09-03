@@ -9,24 +9,22 @@ Glicko-2 ratings. Tiebreaker rules (per league commish):
                         head-to-head for any remaining sub-ties (recursive)
   4. Anything still tied → deterministic fallback by team_id
 
-All series are best-of-3, so per-game Glicko-2 probability is converted to a
-series win probability via p^2 * (3 - 2p).
+Per-series win probability follows each series' FORMAT (2026-09 — the sim
+used to hardcode Bo3, which was structurally wrong for the Lite Bo2
+balanced format): Bo1 p, Bo3 p²(3−2p), Bo5 p³(10−15p+6p²), and Bo2 rolls
+three outcomes (2-0 / 1-1 draw / 0-2) with the draw crediting NO series
+win. Playoff spots come from the season config instead of a constant.
 """
 
 import numpy as np
 import pandas as pd
 
-from app.elo import win_probability, STARTING_ELO
+from app.elo import (
+    bo2_outcome_probs, series_win_probability, win_probability, STARTING_ELO,
+)
 
-PLAYOFF_SPOTS = 8
+PLAYOFF_SPOTS = 8            # fallback when the season config has no value
 DEFAULT_N_SIMS = 8000
-
-
-# ── Tiebreaker primitives ────────────────────────────────────────────────────
-
-def _bo3_prob(p_game: float) -> float:
-    """Series win probability for BO3 given per-game probability."""
-    return p_game * p_game * (3.0 - 2.0 * p_game)
 
 
 def _build_h2h_completed(series_df: pd.DataFrame) -> dict:
@@ -138,9 +136,11 @@ def simulate(
     n_remaining = len(scheduled)
     n_teams = len(team_ids)
 
-    # Remaining-series metadata
+    # Remaining-series metadata — probabilities follow each series' format.
+    # Outcome coding: 1 = team1 series win, 0 = team2 series win, 2 = Bo2 draw.
     remaining = []
-    p_t1_arr = np.zeros(n_remaining)
+    p_win_arr = np.zeros(n_remaining)   # P(team1 wins the series)
+    p_draw_arr = np.zeros(n_remaining)  # P(draw) — nonzero only for Bo2
     t1_idx_arr = np.zeros(n_remaining, dtype=int)
     t2_idx_arr = np.zeros(n_remaining, dtype=int)
     for i, r in scheduled.iterrows():
@@ -150,8 +150,16 @@ def simulate(
         rd1 = rd_map.get(t1, 60.0)
         rd2 = rd_map.get(t2, 60.0)
         p_game = win_probability(r1, r2, rd1, rd2)
-        p_ser = _bo3_prob(p_game)
-        p_t1_arr[i] = p_ser
+        fmt = str(r.get("format", "") or "")
+        if fmt.upper() == "BEST_OF_2":
+            p20, p11, _p02 = bo2_outcome_probs(p_game)
+            p_win_arr[i] = p20
+            p_draw_arr[i] = p11
+            p_ser_display = p20 + 0.5 * p11  # expected series points share
+        else:
+            p_ser = series_win_probability(p_game, fmt)
+            p_win_arr[i] = p_ser if p_ser is not None else p_game
+            p_ser_display = p_win_arr[i]
         t1_idx_arr[i] = team_idx.get(t1, -1)
         t2_idx_arr[i] = team_idx.get(t2, -1)
         remaining.append({
@@ -160,7 +168,7 @@ def simulate(
             "t1Id": t1, "t2Id": t2,
             "t1Name": r.get("team1Name", t1),
             "t2Name": r.get("team2Name", t2),
-            "p_t1": p_ser,
+            "p_t1": p_ser_display,
         })
 
     # No remaining series → deterministic outcome
@@ -185,19 +193,23 @@ def simulate(
             "n_sims": 1,
         }
 
-    # Roll random series outcomes
+    # Roll random series outcomes: 1 = t1 win, 0 = t2 win, 2 = Bo2 draw
     randoms = rng.random((n_sims, n_remaining))
-    sim_outcomes = (randoms < p_t1_arr[None, :]).astype(np.int8)
+    sim_outcomes = np.where(
+        randoms < p_win_arr[None, :], np.int8(1),
+        np.where(randoms < (p_win_arr + p_draw_arr)[None, :], np.int8(2),
+                 np.int8(0)),
+    ).astype(np.int8)
 
-    # Wins per team per sim
+    # Wins per team per sim (draws credit neither side)
     sim_wins = np.zeros((n_sims, n_teams), dtype=np.int16)
     for tid, w in cur_wins.items():
         sim_wins[:, team_idx[tid]] = w
     for s in range(n_remaining):
         if t1_idx_arr[s] >= 0:
-            sim_wins[:, t1_idx_arr[s]] += sim_outcomes[:, s]
+            sim_wins[:, t1_idx_arr[s]] += (sim_outcomes[:, s] == 1)
         if t2_idx_arr[s] >= 0:
-            sim_wins[:, t2_idx_arr[s]] += (1 - sim_outcomes[:, s])
+            sim_wins[:, t2_idx_arr[s]] += (sim_outcomes[:, s] == 0)
 
     # Seeds per sim — apply tiebreakers with per-sim h2h
     sim_seeds = np.zeros((n_sims, n_teams), dtype=np.int8)
@@ -208,9 +220,12 @@ def simulate(
 
     for sim in range(n_sims):
         # Per-sim h2h — start from completed and add this sim's results
+        # (Bo2 draws contribute no head-to-head edge)
         h2h = dict(h2h_completed)
         outcomes = sim_outcomes[sim]
         for s in range(n_remaining):
+            if outcomes[s] == 2:
+                continue
             if outcomes[s] == 1:
                 w, l = rem_t1[s], rem_t2[s]
             else:
@@ -238,10 +253,13 @@ def simulate(
 
 # ── Probability extraction ───────────────────────────────────────────────────
 
-def seed_probabilities(sim_data: dict, scenario_mask: np.ndarray = None) -> pd.DataFrame:
+def seed_probabilities(sim_data: dict, scenario_mask: np.ndarray = None,
+                       playoff_spots: int = PLAYOFF_SPOTS) -> pd.DataFrame:
     """Return P(seed = k) for each team across all seeds, plus P(miss).
 
-    Columns: team_id, seed_1, seed_2, ..., seed_8, miss, make_playoffs,
+    playoff_spots comes from the season config (2026-09 — was hardcoded 8,
+    which inflated make-playoffs odds for seasons with fewer spots).
+    Columns: team_id, seed_1..seed_{spots}, miss, make_playoffs,
              avg_seed, avg_wins
     """
     seeds = sim_data["sim_seeds"]
@@ -261,9 +279,9 @@ def seed_probabilities(sim_data: dict, scenario_mask: np.ndarray = None) -> pd.D
         i = team_idx[tid]
         team_seeds = seeds[:, i]
         row = {"team_id": tid}
-        for k in range(1, PLAYOFF_SPOTS + 1):
+        for k in range(1, playoff_spots + 1):
             row[f"seed_{k}"] = float((team_seeds == k).mean())
-        row["miss"] = float((team_seeds > PLAYOFF_SPOTS).mean())
+        row["miss"] = float((team_seeds > playoff_spots).mean())
         row["make_playoffs"] = 1.0 - row["miss"]
         row["avg_seed"] = float(team_seeds.mean())
         row["avg_wins"] = float(wins[:, i].mean())

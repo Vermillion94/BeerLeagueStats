@@ -131,6 +131,9 @@ def _sunfire_stats(db, sid):
 
 @st.cache_data
 def _peak_ranks(db):
+    # data_loader handles both numeric AND roman divisions since 53a8d47 —
+    # this file touched to force a full app restart on Streamlit Cloud (the
+    # source-only deploy left the old module running).
     return load_peak_ranks(db)
 
 

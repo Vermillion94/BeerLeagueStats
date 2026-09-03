@@ -728,11 +728,24 @@ hr {
     background: #334155;
 }
 
-/* ---- Multiselect tags ---- */
-[data-baseweb="tag"] {
-    background: #1e293b !important;
+/* ---- Multiselect tags ----
+   Gold chip with DARK text (owner 2026-09: the theme's primaryColor gave
+   gold chips with white letters — unreadable). Styled to match the WEEK
+   badge; every child forced dark so BaseWeb DOM changes can't regress it. */
+[data-baseweb="tag"],
+[data-testid="stMultiSelectTag"] {
+    background: #FFD700 !important;
+    background-color: #FFD700 !important;
     border-color: #FFD700 !important;
     font-family: 'Barlow Condensed', sans-serif;
+}
+[data-baseweb="tag"], [data-baseweb="tag"] *,
+[data-testid="stMultiSelectTag"], [data-testid="stMultiSelectTag"] * {
+    color: #0a0e13 !important;
+}
+[data-baseweb="tag"] svg,
+[data-testid="stMultiSelectTag"] svg {
+    fill: #0a0e13 !important;
 }
 </style>
 """

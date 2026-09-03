@@ -1654,6 +1654,21 @@ def chart_elo_standings_with_delta(standings_df: pd.DataFrame,
 # UPCOMING MATCHUPS
 # ════════════════════════════════════════════════════════════════════════════
 
+def _contrast_text(hex_color: str) -> str:
+    """Black or white, whichever reads on the given background (WCAG-ish
+    relative luminance). Team colors span white → bright yellow → navy, and
+    the old fixed-white labels vanished on light bars (owner 2026-09)."""
+    try:
+        h = str(hex_color).lstrip("#")
+        if len(h) == 3:
+            h = "".join(c * 2 for c in h)
+        r, g, b = (int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    except (ValueError, TypeError):
+        return "#fff"
+    lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    return "#0a0e13" if lum > 0.45 else "#ffffff"
+
+
 def chart_win_probability(
     team_a_name: str, team_b_name: str,
     prob_a: float,
@@ -1665,9 +1680,9 @@ def chart_win_probability(
     pct_a = round(prob_a * 100, 1)
     pct_b = round(prob_b * 100, 1)
 
-    # Use white text with dark outline for readability on any bar color
-    _font = dict(color="#fff", size=12, family="Oswald, sans-serif")
-    _outline = dict(color="#000", width=1)
+    # Label color per segment, chosen by the segment's luminance
+    _font_a = dict(color=_contrast_text(color_a), size=12, family="Oswald, sans-serif")
+    _font_b = dict(color=_contrast_text(color_b), size=12, family="Oswald, sans-serif")
 
     fig = _base("", height=50)
     fig.add_trace(go.Bar(
@@ -1676,8 +1691,8 @@ def chart_win_probability(
         text=[f"{team_a_name}  {pct_a:.0f}%"],
         textposition="inside",
         insidetextanchor="middle",
-        textfont=_font,
-        outsidetextfont=_font,
+        textfont=_font_a,
+        outsidetextfont=_font_a,
         hoverinfo="skip",
     ))
     fig.add_trace(go.Bar(
@@ -1686,8 +1701,8 @@ def chart_win_probability(
         text=[f"{pct_b:.0f}%  {team_b_name}"],
         textposition="inside",
         insidetextanchor="middle",
-        textfont=_font,
-        outsidetextfont=_font,
+        textfont=_font_b,
+        outsidetextfont=_font_b,
         hoverinfo="skip",
     ))
     fig.update_layout(

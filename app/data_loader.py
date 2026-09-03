@@ -1065,17 +1065,32 @@ def load_peak_ranks(db_path: str) -> dict:
     if not rows:
         return {}
 
+    # historical_rank.division is numeric text ("1"–"5") on op.gg history
+    # rows but ROMAN ("I"–"IV") on the website's live league-v4 rows
+    # (Rating v2, 2026-08) — snapshots taken since then mix both formats,
+    # which crashed the old bare int(). Unknown/absent (Master+ has no
+    # division) maps to 0, which sorts as best within the tier.
+    roman_divs = {"I": 1, "II": 2, "III": 3, "IV": 4, "V": 5}
+
+    def _div_num(raw) -> int:
+        if not raw:
+            return 0
+        s = str(raw).strip().upper()
+        if s.isdigit():
+            return int(s)
+        return roman_divs.get(s, 0)
+
     # Find peak per player
     best = {}  # username → (tier_order, division, tier_str)
     for username, tier, division in rows:
         order = _TIER_ORDER.get(tier, 99)
-        div = int(division) if division else 0
+        div = _div_num(division)
         key = (order, div)  # lower = better
         if username not in best or key < best[username]:
             best[username] = key
 
     result = {}
-    division_roman = {"1": "I", "2": "II", "3": "III", "4": "IV"}
+    division_roman = {"1": "I", "2": "II", "3": "III", "4": "IV", "5": "V"}
     for username, (order, div) in best.items():
         tier = [t for t, o in _TIER_ORDER.items() if o == order][0]
         tier_display = tier.capitalize()

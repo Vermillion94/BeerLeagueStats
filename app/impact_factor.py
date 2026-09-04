@@ -213,6 +213,45 @@ def player_of_the_week(player_stats_df: pd.DataFrame) -> pd.DataFrame:
     return agg.sort_values("avg_if", ascending=False).head(5).reset_index(drop=True)
 
 
+def season_value_board(player_stats_df: pd.DataFrame, min_games: int = 4) -> pd.DataFrame:
+    """Season-long Impact-Factor-per-salary-point board (owner 2026-09).
+
+    Impact Factors are computed over the WHOLE season pool (within-role
+    percentiles, so roles are comparable), averaged per player, and divided
+    by the player's salary. High value = doing more than the price tag says.
+
+    Returns DataFrame sorted by value desc:
+      username, riotId, position, games, wins, salary, avg_if, value
+    """
+    if player_stats_df.empty:
+        return pd.DataFrame()
+
+    df = compute_impact_factors(player_stats_df)
+    id_col = "summonerId" if "summonerId" in df.columns else "username"
+
+    agg = df.groupby([id_col, "riotId", "username"]).agg(
+        games=("impact_factor", "count"),
+        wins=("win", "sum"),
+        avg_if=("impact_factor", "mean"),
+        salary=("salary", "max"),
+    ).reset_index()
+
+    if "position" in df.columns:
+        pos = (df.groupby(id_col)["position"]
+               .agg(lambda s: s.mode().iloc[0] if len(s.mode()) else "")
+               .rename("position"))
+        agg = agg.merge(pos, left_on=id_col, right_index=True)
+    else:
+        agg["position"] = ""
+
+    agg["salary"] = pd.to_numeric(agg["salary"], errors="coerce").fillna(0)
+    agg = agg[(agg["games"] >= min_games) & (agg["salary"] > 0)].copy()
+    if agg.empty:
+        return agg
+    agg["value"] = agg["avg_if"] / agg["salary"]
+    return agg.sort_values("value", ascending=False).reset_index(drop=True)
+
+
 def weight_breakdown() -> list:
     """Return human-readable weight breakdown for the formula expander.
 

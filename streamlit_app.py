@@ -26,7 +26,10 @@ from app.elo import (
     compute_elo_through_week, salary_seeding, series_win_probability,
     win_probability, STARTING_ELO,
 )
-from app.impact_factor import compute_impact_factors, player_of_the_week, weight_breakdown
+from app.impact_factor import (
+    compute_impact_factors, player_of_the_week, season_value_board,
+    weight_breakdown,
+)
 from app import playoff
 from app.config import (
     UPSET_THRESHOLD, CLOSE_MATCHUP_THRESHOLD, DEFAULT_RD,
@@ -138,6 +141,19 @@ def _peak_ranks(db):
     # this file touched to force a full app restart on Streamlit Cloud (the
     # source-only deploy left the old module running).
     return load_peak_ranks(db)
+
+
+@st.cache_data
+def _report_card(db, sid):
+    """Cached walk-forward model report card for a season."""
+    from app.report_card import build_report_card
+    matches = _all_matches(db, sid)
+    weeks = load_completed_weeks(db, sid)
+    teams = _teams(db, sid)
+    names = dict(zip(teams["teamId"].astype(str), teams["name"]))
+    sals = dict(zip(teams["teamId"].astype(str),
+                    pd.to_numeric(teams["salaryTotal"], errors="coerce").fillna(0)))
+    return build_report_card(matches, weeks, names, sals)
 
 
 @st.cache_data
@@ -589,6 +605,53 @@ with tabs[2]:
                         width="stretch",
                     )
 
+            # ── Value Board: Impact Factor per salary point ──────────────
+            board = season_value_board(all_ps)
+            if not board.empty:
+                st.markdown(
+                    f'<div style="color:{ACCENT_GOLD};font-family:Oswald,sans-serif;'
+                    f'font-size:1rem;letter-spacing:2px;margin:0.8rem 0 0.2rem 0">'
+                    f'VALUE BOARD — IMPACT PER SALARY POINT</div>',
+                    unsafe_allow_html=True,
+                )
+                st.caption(
+                    "Season-long Impact Factor (role-relative) divided by salary. "
+                    "High value = outplaying the price tag. Minimum 4 games."
+                )
+
+                def _fmt(bdf):
+                    show = bdf[["username", "position", "salary",
+                                "games", "wins", "avg_if", "value"]].copy()
+                    show["record"] = show.apply(
+                        lambda r: f"{int(r['wins'])}-{int(r['games'] - r['wins'])}", axis=1)
+                    show["avg_if"] = show["avg_if"].round(1)
+                    show["value"] = show["value"].round(2)
+                    show["salary"] = show["salary"].map(lambda s: f"{s:g}")
+                    return show.rename(columns={
+                        "username": "Player", "position": "Role",
+                        "salary": "Cost", "avg_if": "Impact",
+                        "value": "Impact/Cost", "record": "Record",
+                    })[["Player", "Role", "Cost", "Record", "Impact", "Impact/Cost"]]
+
+                col_steal, col_press = st.columns(2)
+                with col_steal:
+                    st.markdown(
+                        f'<span style="color:{WIN_COLOR};font-family:Oswald,sans-serif;'
+                        f'letter-spacing:1px">💰 SALARY STEALS</span>',
+                        unsafe_allow_html=True,
+                    )
+                    st.dataframe(_fmt(board.head(8)), width="stretch", hide_index=True)
+                with col_press:
+                    st.markdown(
+                        f'<span style="color:{ACCENT_RED};font-family:Oswald,sans-serif;'
+                        f'letter-spacing:1px">👑 PRESSURE IS ON</span>',
+                        unsafe_allow_html=True,
+                    )
+                    st.caption("Top-quartile price tags with the most room to grow.")
+                    premium = board[board["salary"] >= board["salary"].quantile(0.75)]
+                    st.dataframe(_fmt(premium.sort_values("value").head(5)),
+                                 width="stretch", hide_index=True)
+
             # Draft Diversity
             diversity = _draft_diversity(DB, sid)
             if not diversity.empty:
@@ -962,6 +1025,47 @@ with tabs[5]:
                         width="stretch",
                         key=f"wp_{sid}_{wk}_{row['seriesId']}",
                     )
+
+        # ── Model report card: how have the odds actually done? ──────────
+        for sid in active_sids:
+            if not season_has_data(DB, sid):
+                continue
+            rc = _report_card(DB, sid)
+            if not rc["n"]:
+                continue
+            d = _mu_data[sid]
+            st.markdown(section_header(f"{d['name']} — Model Report Card",
+                                       league_badge(d["div"])),
+                        unsafe_allow_html=True)
+            st.markdown(
+                chyron_row([
+                    stat_chyron("Record", f"{rc['hits']}-{rc['n'] - rc['hits']}", "white"),
+                    stat_chyron("Pick Accuracy", f"{rc['acc'] * 100:.0f}%", "teal"),
+                    stat_chyron("Brier Score", f"{rc['brier']:.3f}", "white"),
+                    stat_chyron("Upsets", str(len(rc["upsets"])), "gold"),
+                ]),
+                unsafe_allow_html=True,
+            )
+            weekly_str = " · ".join(f"W{w['week']}: {w['hits']}/{w['total']}"
+                                    for w in rc["weekly"])
+            st.caption(f"Pre-game picks, graded weekly — {weekly_str}. "
+                       "Brier: 0.25 = coin flip, lower is better.")
+            if rc["upsets"]:
+                lines = "".join(
+                    f'<div style="font-family:Barlow Condensed,sans-serif;'
+                    f'color:{TEXT_SEC};font-size:0.85rem;margin:2px 0">'
+                    f'W{u["week"]}: <b>{u["dog_name"]}</b> took down '
+                    f'<b>{u["fav_name"]}</b> (we had them at '
+                    f'{u["fav_prob"] * 100:.0f}%)</div>'
+                    for u in rc["upsets"][:3]
+                )
+                st.markdown(
+                    f'<div style="margin:0.3rem 0 0.8rem 0">'
+                    f'<span style="color:{ACCENT_GOLD};font-family:Oswald,sans-serif;'
+                    f'letter-spacing:1px;font-size:0.85rem">BIGGEST UPSETS</span>'
+                    f'{lines}</div>',
+                    unsafe_allow_html=True,
+                )
 
         # Render week-by-week with leagues side-by-side
         for wk in sorted(all_weeks):

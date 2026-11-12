@@ -108,8 +108,12 @@ def compute_impact_factors(player_stats_df: pd.DataFrame) -> pd.DataFrame:
     )
 
     # ── NEW: Playmaking composite ──
-    # CC dealt (centiseconds → seconds → per min) + outnumbered kills + epic steals
-    cc_per_min = (_safe_col(df, "totalTimeCCDealt") / 100) / game_mins
+    # CC dealt per minute + outnumbered kills + epic steals
+    # totalTimeCCDealt is already in SECONDS (league median ≈ 230 s/game). The
+    # old /100 "centisecond" conversion shrank CC to a rounding error, so this
+    # composite was really just outnumbered kills + steals (fixed 2026-11).
+    # Scaled so ~10 s of CC per minute weighs about the same as one steal.
+    cc_per_min = (_safe_col(df, "totalTimeCCDealt") / game_mins) / 5.0
     outnumbered = _safe_col(df, "outnumberedKills")
     steals = _safe_col(df, "epicMonsterSteals")
     # Combine: CC is the bulk, outnumbered kills add flair, steals are huge

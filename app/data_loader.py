@@ -14,7 +14,7 @@ import pandas as pd
 
 def get_db_paths() -> list:
     """Return all .db files in ./data/, sorted newest-first by filename."""
-    data_dir = Path("data")
+    data_dir = Path(__file__).resolve().parent.parent / "data"
     return sorted(data_dir.glob("*.db"), reverse=True)
 
 
@@ -953,8 +953,45 @@ _COMPONENT_IDS = {
 SUNFIRE_IDS = {3068}
 
 
+def _ddragon_items() -> dict:
+    """{item_id: {"name", "completed"}} from Data Dragon, cached in-memory.
+    The static ITEM_NAMES table goes stale every patch ("Item 1086" showed up
+    on the dashboard); this keeps names and the completed-item filter current.
+    Empty dict when the CDN is unreachable - callers fall back to the table."""
+    if not hasattr(_ddragon_items, "_cache"):
+        out = {}
+        ver = ddragon_version()
+        if ver:
+            try:
+                import urllib.request
+                data = json.loads(urllib.request.urlopen(
+                    f"https://ddragon.leagueoflegends.com/cdn/{ver}/data/en_US/item.json",
+                    timeout=5).read())
+                for iid, info in data["data"].items():
+                    tags = set(info.get("tags", []))
+                    gold = info.get("gold", {})
+                    completed = (not info.get("into") and gold.get("total", 0) >= 2000
+                                 and not ({"Boots", "Consumable", "Trinket"} & tags))
+                    out[int(iid)] = {"name": info.get("name", f"Item {iid}"), "completed": completed}
+            except Exception:
+                out = {}
+        _ddragon_items._cache = out
+    return _ddragon_items._cache
+
+
 def _item_name(item_id: int) -> str:
+    live = _ddragon_items().get(item_id)
+    if live:
+        return live["name"]
     return ITEM_NAMES.get(item_id, f"Item {item_id}")
+
+
+def _is_completed_item(item_id: int) -> bool:
+    live = _ddragon_items()
+    if live:
+        info = live.get(item_id)
+        return bool(info and info["completed"])
+    return item_id not in _COMPONENT_IDS
 
 
 def load_item_stats(db_path: str, season_id: str) -> pd.DataFrame:
@@ -983,7 +1020,7 @@ def load_item_stats(db_path: str, season_id: str) -> pd.DataFrame:
         win = int(r["win"])
         for slot in range(6):
             iid = int(r[f"item{slot}"] or 0)
-            if iid > 0 and iid not in _COMPONENT_IDS:
+            if iid > 0 and _is_completed_item(iid):
                 rows.append({"item_id": iid, "win": win})
 
     if not rows:

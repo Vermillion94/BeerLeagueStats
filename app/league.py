@@ -80,7 +80,8 @@ def _sid(v):
 
 
 def band_of(row) -> str:
-    b = (row.get("band") or "").upper()
+    b = row.get("band")
+    b = b.upper() if isinstance(b, str) else ""
     if b in ("LITE", "STOUT"):
         return b
     return "LITE" if "lite" in str(row.get("name", "")).lower() else "STOUT"

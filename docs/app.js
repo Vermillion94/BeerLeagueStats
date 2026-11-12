@@ -11,8 +11,9 @@ const sign = (v, d = 0) => v == null ? '–' : (v > 0 ? '+' : '') + num(v, d);
 const clock = s => s == null ? '–' : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const ROLE = { TOP: 'TOP', JUNGLE: 'JGL', MIDDLE: 'MID', BOTTOM: 'ADC', SUPPORT: 'SUP' };
 const ROLE_COLOR = { TOP: '#e5484d', JUNGLE: '#2fbf8f', MIDDLE: '#4f8ff7', BOTTOM: '#f59e0b', SUPPORT: '#a78bfa' };
-const PAGES = [['overview', 'Overview'], ['standings', 'Standings & Playoffs'], ['recap', 'Weekly Recap'],
-  ['players', 'Players'], ['teams', 'Teams'], ['champions', 'Champions & Draft'], ['forecasts', 'Forecasts']];
+const PAGES = [['overview', 'Overview'], ['standings', 'Standings'], ['playoffs', 'Playoffs'], ['recap', 'Recap'],
+  ['players', 'Players'], ['teams', 'Teams'], ['wins', 'How Games Are Won'], ['champions', 'Champions'],
+  ['draft', 'Draft & Items'], ['records', 'Record Book'], ['forecasts', 'Forecasts']];
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const state = { index: null, cache: {}, D: null, band: null, sid: null, page: 'overview', week: null, timer: null, ddv: null };
@@ -305,40 +306,29 @@ pages.overview = el => {
       <div><h2>Week ${w} storylines</h2>${stories(wk.stories, 5)}</div>
     </div>
     ${D.active && next.length ? `<h2>${nextWk ? 'Up next — week ' + nextWk : 'Still to play'} <small>model = Glicko-2 series odds · crowd = Crystal Ball picks</small></h2><div class="grid rv">${next.map(forecastCard).join('')}</div>` : ''}
-    ${D.active && !next.length ? `<h2>Playoff field</h2><div class="rv">${bracketHtml()}</div>` : ''}
+    ${D.title ? `<h2>Title odds <small>${D.bracket_real ? 'the real bracket' : 'projected bracket'}, simulated · <a href="#/${state.band.toLowerCase()}/${state.sid}/playoffs" style="color:var(--gold)">full bracket →</a></small></h2><div id="tmini"></div>` : ''}
     ${!D.active && D.champion ? `<h2>Champion</h2><div class="hero rv"><div class="k">${esc(D.name)}</div><div class="n">🏆 ${esc(T(D.champion).name)}</div></div>` : ''}
     <h2>Week ${w} results</h2><div class="grid rv">${D.series.filter(s => s.week === w && s.status === 'COMPLETED').map(bug).join('')}</div>`;
   if (D.ratings.weeks.length > 1) replay($('#replay', el)); else $('#replay', el).innerHTML = '<p class="note">Ratings appear after week 1.</p>';
   standingsBlock($('#st', el), w, { compact: true });
+  if (D.title) $('#tmini', el).innerHTML = hbars(D.title.odds.filter(o => o.win > 0).slice(0, 8).map(o => ({ label: T(o.t).name, value: o.win, text: pct(o.win, 1), color: T(o.t).color })));
 };
 
 pages.standings = el => {
-  const D = state.D, P = D.playoff, last = D.weeks.at(-1);
+  const D = state.D;
   const drops = Object.values(D.teams).filter(t => t.dropped).map(t => `${esc(t.name)} (${t.drop_mode})`);
   el.innerHTML = `
-    <div class="banner"><div><h1>Standings & Playoffs</h1><p>Ranked exactly the way the league site ranks them</p></div><div class="badge ${D.band}">${D.band}</div></div>
-    <h2>Standings <small>drag the week to rewind the table</small></h2>
+    <div class="banner"><div><h1>Standings</h1><p>Ranked exactly the way the league site ranks them</p></div><div class="badge ${D.band}">${D.band}</div></div>
+    <h2>Standings <small>drag the week to rewind the table · click a team for its profile</small></h2>
     <div class="player"><div class="wk" id="swk"></div><input type="range" id="sw" min="0" max="${D.weeks.length - 1}" value="${D.weeks.length - 1}"></div>
     <div id="st"></div>
     <p class="note"><b>Tiebreakers:</b> ${D.tiebreakers.map(esc).join(' → ')}.${D.cross_group ? `<br><b>Seeding:</b> each group sends its top ${D.spots / 2}, ranked on in-group series only; seeds alternate between groups so round one is always cross-group. Out-of-group weeks are exhibitions.` : ''}
     ${drops.length ? `<br><b>Dropped:</b> ${drops.join(', ')}. A void drop removes every series against that team; a forfeit drop credits each opponent a series win with no games.` : ''}
     <br><b>=</b> marks teams still level after every tiebreaker this page can compute.</p>
-    ${D.active ? `<h2>Playoff picture <small>${P.remaining.length ? P.remaining.length + ' counting series left' : 'regular season complete'}</small></h2><div class="rv">${bracketHtml()}</div><p class="note">Bracket as it would be seeded today.</p>` : ''}
-    ${P && P.remaining.length ? `<div class="cols w32"><div class="rv"><h3 style="margin-top:18px">Where each team finishes — % of simulations by seed</h3><div id="heat"></div></div>
-      <div><h3 style="margin-top:18px">On the bubble</h3><div id="bubble"></div>${P.leverage.length ? '<h3 style="margin-top:18px">Games that matter most</h3>' + P.leverage.map(l => `<div class="story"><div class="t">WEEK ${l.week}</div><div class="x"><b>${esc(l.t1)} vs ${esc(l.t2)}</b> — ${esc(T(l.team_id).name)} make the playoffs in <b>${pct(l.if_t1)}</b> of sims if ${esc(l.t1)} win, <b>${pct(l.if_t2)}</b> if ${esc(l.t2)} win.</div></div>`).join('') : ''}</div></div>
-      <p class="note">${num(P.n_sims)} simulations of the remaining schedule, each series rolled to an exact score because game wins are the first tiebreaker. IN / OUT means every simulation agreed — not a mathematical clinch.</p>` : ''}
-    ${D.playoff_results.length ? `<h2>Playoff results</h2><div class="grid rv">${D.playoff_results.map(bug).join('')}</div>` : ''}`;
+    <p class="note"><a href="#/${state.band.toLowerCase()}/${state.sid}/playoffs" style="color:var(--gold)">Playoff odds and the bracket →</a></p>`;
   const sw = $('#sw', el), host = $('#st', el);
   const set = () => { const w = D.weeks[+sw.value]; $('#swk', el).textContent = 'WEEK ' + w; standingsBlock(host, w); };
   sw.oninput = set; set();
-  if (P && P.remaining.length) {
-    const rows = P.teams.filter((t, i) => t.make > 0 || i < P.spots + 3), cols = P.spots + 1;
-    const heat = $('#heat', el); heat.className = 'heat'; heat.style.gridTemplateColumns = `minmax(110px,170px) repeat(${cols}, 1fr)`;
-    heat.innerHTML = '<div></div>' + d3.range(1, cols).map(i => `<div class="hh">${i}</div>`).join('') + '<div class="hh">MISS</div>' +
-      rows.map((t, ri) => `<div class="hn">${esc(T(t.t).name)}</div>` + [...t.seeds, t.miss].map((p, ci) => { const a = Math.pow(p, .6); return `<div class="c" title="${esc(T(t.t).name)} · ${ci < cols - 1 ? 'seed ' + (ci + 1) : 'miss'}: ${(p * 100).toFixed(1)}%" style="animation-delay:${(ri * 30 + ci * 18)}ms;background:${p > .004 ? `rgba(255,215,0,${(0.1 + a * 0.9).toFixed(2)})` : '#141b2b'};color:${a > .55 ? '#080b12' : '#f1f5f9'}">${p >= .005 ? Math.round(p * 100) : ''}</div>`; }).join('')).join('');
-    const bub = P.teams.filter(t => t.make > .001 && t.make < .999).sort((a, b) => b.make - a.make);
-    $('#bubble', el).innerHTML = bub.length ? hbars(bub.map(t => ({ label: T(t.t).name, value: t.make, text: pct(t.make), color: T(t.t).color }))) : '<p class="note">Nobody — every team is either in or out in every simulation.</p>';
-  }
 };
 
 pages.recap = el => {
@@ -438,31 +428,119 @@ pages.teams = el => {
     { k: 'champ_pool', label: 'Champs', num: 1 }, { k: 'mins', label: 'Avg time', num: 1, f: v => clock(v * 60) }], ts, { key: 'win_pct', onRow: r => teamProfile(r.team_id) });
 };
 
-pages.champions = el => {
-  const D = state.D, ch = D.champions || [], dr = D.draft || {}, played = ch.filter(c => c.picks > 0);
-  const banned = [...ch].sort((a, b) => b.bans - a.bans), never = ch.filter(c => !c.picks && c.bans >= 3).sort((a, b) => b.bans - a.bans)[0];
+pages.playoffs = el => {
+  const D = state.D, P = D.playoff, TT = D.title;
+  const fav = TT?.odds[0], alive = TT ? TT.odds.filter(o => o.win > 0).length : 0;
+  const fmtName = f => ({ BEST_OF_1: 'Bo1', BEST_OF_3: 'Bo3', BEST_OF_5: 'Bo5' }[f] || f);
   el.innerHTML = `
-    <div class="banner"><div><h1>Champions & Draft</h1><p>Presence = picked or banned</p></div><div class="badge ${D.band}">${D.band}</div></div>
-    <div class="chyrons rv">${chyron('Champions played', played.length, `${ch.length} picked or banned`, { to: played.length })}
+    <div class="banner"><div><h1>Playoffs</h1><p>${TT ? (D.bracket_real ? 'The real bracket, simulated ' + num(TT.n_sims) + ' times' : 'Projected bracket from today\'s standings') : D.active ? 'Race for the bracket' : 'How it finished'}</p></div><div class="badge ${D.band}">${D.band}</div></div>
+    ${TT ? `<div class="chyrons rv">${chyron('Title favourite', esc(T(fav.t).name), pct(fav.win, 1) + ' to win it all', { cls: 'sm' })}
+      ${chyron('Favourite\'s odds', pct(fav.win), 'nobody is a lock', { to: fav.win * 100, suf: '%', cls: 'white' })}
+      ${chyron('Teams with a path', alive, `of ${TT.odds.length} in the field`, { to: alive, cls: 'white' })}
+      ${chyron('Rounds', TT.n_rounds, TT.rounds.map(r => fmtName(r.matches[0]?.fmt)).join(' · '), { cls: 'white' })}</div>
+    <h2>Title odds <small>chance to reach each round · click a column to sort</small></h2><div id="odds"></div>
+    <h2>The bracket <small>bars = model's chance to win the series</small></h2><div class="brk rv" id="brk"></div>
+    <p class="note">Each series is rolled from the calibrated Glicko-2 per-game odds at the series' real format. Completed series keep their actual result. Where a slot is still open, the three most likely teams to fill it are listed.</p>` : ''}
+    ${P ? `<h2>Race for the playoffs <small>${P.remaining.length ? P.remaining.length + ' counting series left' : 'regular season complete — field is set'}</small></h2>
+      <div class="cols w23"><div><h3>Make the playoffs</h3><div id="mk"></div></div><div><h3>Where each team finishes — % of simulations by seed</h3><div id="heat"></div></div></div>
+      ${P.pins ? `<h2>What if? <small>pin results and watch the odds move</small></h2><div class="panel" id="pins"></div><p class="note" id="pinnote"></p>` : ''}
+      ${P.leverage.length ? '<h2>Games that matter most</h2><div class="grid">' + P.leverage.map(l => `<div class="story"><div class="t">WEEK ${l.week}</div><div class="x"><b>${esc(l.t1)} vs ${esc(l.t2)}</b> — ${esc(T(l.team_id).name)} make the playoffs in <b>${pct(l.if_t1)}</b> of sims if ${esc(l.t1)} win, <b>${pct(l.if_t2)}</b> if ${esc(l.t2)} win.</div></div>`).join('') + '</div>' : ''}
+      <p class="note">${P.remaining.length ? `${num(P.n_sims)} simulations of the remaining regular season, each series rolled to an exact score because game wins are the first tiebreaker. IN / OUT means every simulation agreed — not a mathematical clinch.` : 'The regular season is over, so these are final: seeds follow the site\'s tiebreakers.'}</p>` : ''}
+    ${D.playoff_results.length ? `<h2>Playoff results</h2><div class="grid rv">${D.playoff_results.map(bug).join('')}</div>` : ''}
+    ${!TT && !P && !D.playoff_results.length ? '<p class="note">No playoff data for this season.</p>' : ''}`;
+  if (TT) {
+    const rs = d3.range(2, TT.n_rounds + 1), rows = TT.odds.map(o => ({ t: o.t, team: T(o.t).name, rating: o.rating, win: o.win, ...Object.fromEntries(rs.map(r => ['r' + r, o.reach[r] ?? 0])) }));
+    sortable($('#odds', el), [{ k: 'team', label: 'Team', cls: 'team', html: r => `${dot(r.t)}${esc(r.team)}` }, { k: 'rating', label: 'Rating', num: 1, f: v => num(v) },
+      ...rs.map(r => ({ k: 'r' + r, label: TT.names[r], num: 1, f: v => v >= .9995 ? '✓' : v <= 0 ? '–' : pct(v) })),
+      { k: 'win', label: 'Win title', num: 1, html: r => cellBar(r.win, Math.max(...rows.map(x => x.win)), pct(r.win, 1)) }], rows, { key: 'win', rank: true, onRow: r => teamProfile(r.t) });
+    const line = (t, p, s, won, done) => t ? `<div class="bl ${won ? 'w' : done ? 'l' : ''}">${dot(t)}<span class="n">${esc(T(t).name)}</span>${done ? `<b>${s}</b>` : p != null ? `<span class="bp"><i data-w="${Math.round(p * 100)}%"></i><em>${Math.round(p * 100)}%</em></span>` : ''}</div>` : '';
+    $('#brk', el).style.gridTemplateColumns = `repeat(${TT.n_rounds}, minmax(200px, 1fr))`;
+    $('#brk', el).innerHTML = TT.rounds.map(r => `<div class="bcol"><h3>${esc(r.name)} · ${fmtName(r.matches[0]?.fmt)}</h3>${r.matches.map(m => { const done = m.status === 'COMPLETED';
+      return `<div class="bm">${line(m.t1, m.p1, m.s1, m.winner === m.t1, done)}${line(m.t2, m.p1 == null ? null : 1 - m.p1, m.s2, m.winner === m.t2, done)}
+        ${m.likely.length ? `<div class="bl tbd">${m.t1 || m.t2 ? 'vs' : 'likely'} ${m.likely.map(x => `${esc(T(x.t).name)} <em>${Math.round(x.p * 100)}%</em>`).join(' · ')}</div>` : ''}</div>`; }).join('')}</div>`).join('');
+  }
+  if (P) {
+    const cols = P.spots + 1, heat = $('#heat', el), mk = $('#mk', el);
+    const drawMake = probs => { mk.innerHTML = hbars(probs.map(t => ({ label: T(t.t).name, value: Math.max(t.make, .004), text: t.make >= .9995 ? 'IN' : t.make <= .0005 ? 'OUT' : pct(t.make), color: T(t.t).color }))); mk.querySelector('.rv').classList.add('in'); mk.querySelectorAll('[data-w]').forEach(b => requestAnimationFrame(() => b.style.width = b.dataset.w)); };
+    const drawHeat = (probs, anim) => { const rows = probs.filter((t, i) => t.make > 0 || i < P.spots + 3);
+      heat.className = 'heat'; heat.style.gridTemplateColumns = `minmax(100px,160px) repeat(${cols}, 1fr)`;
+      heat.innerHTML = '<div></div>' + d3.range(1, cols).map(i => `<div class="hh">${i}</div>`).join('') + '<div class="hh">MISS</div>' +
+        rows.map((t, ri) => `<div class="hn">${esc(T(t.t).name)}</div>` + [...t.seeds, t.miss].map((p, ci) => { const a = Math.pow(p, .6); return `<div class="c" title="${esc(T(t.t).name)} · ${ci < cols - 1 ? 'seed ' + (ci + 1) : 'miss'}: ${(p * 100).toFixed(1)}%" style="${anim ? `animation-delay:${ri * 30 + ci * 18}ms` : 'animation:none;opacity:1'};background:${p > .004 ? `rgba(255,215,0,${(0.1 + a * 0.9).toFixed(2)})` : '#141b2b'};color:${a > .55 ? '#080b12' : '#f1f5f9'}">${p >= .005 ? Math.round(p * 100) : ''}</div>`; }).join('')).join(''); };
+    drawMake(P.teams); drawHeat(P.teams, true);
+    if (P.pins) {
+      const X = P.pins, pin = {};
+      $('#pins', el).innerHTML = P.remaining.map((r, i) => `<div class="pinrow" data-i="${i}"><span class="pw">W${r.week}</span><button data-v="1">${esc(T(r.t1Id).name)} <em>${Math.round(r.p_t1 * 100)}%</em></button><button data-v="" class="on">no pin</button><button data-v="0">${esc(T(r.t2Id).name)} <em>${Math.round((1 - r.p_t1) * 100)}%</em></button></div>`).join('');
+      const recompute = () => {
+        const keep = []; for (let k = 0; k < X.n; k++) { let ok = true; for (const i in pin) if (X.outcomes[i][k] !== pin[i]) { ok = false; break; } if (ok) keep.push(k); }
+        const n = keep.length, pinned = Object.keys(pin).length;
+        $('#pinnote', el).innerHTML = pinned ? `<b>${pinned} pinned</b> — ${num(n)} of ${num(X.n)} simulations match.${n < 60 ? ' Too few to trust; unpin something.' : ''}` : 'Nothing pinned. Click a team to lock in that result.';
+        if (!n) return;
+        const probs = X.teams.map((t, ti) => { const seeds = new Array(P.spots).fill(0); let miss = 0, sum = 0; for (const k of keep) { const s = X.seeds[ti].charCodeAt(k) - 48; sum += s; if (s > P.spots) miss++; else seeds[s - 1]++; } return { t, make: 1 - miss / n, miss: miss / n, avg_seed: sum / n, seeds: seeds.map(v => v / n) }; }).sort((a, b) => a.avg_seed - b.avg_seed);
+        drawMake(probs); drawHeat(probs, false);
+      };
+      $('#pins', el).querySelectorAll('.pinrow').forEach(row => row.querySelectorAll('button').forEach(b => b.onclick = () => { row.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); if (b.dataset.v === '') delete pin[row.dataset.i]; else pin[row.dataset.i] = b.dataset.v; recompute(); }));
+      recompute();
+    }
+  }
+};
+
+pages.champions = el => {
+  const D = state.D, ch = D.champions || [], X = D.champ_x || {}, dr = D.draft || {}, played = ch.filter(c => c.picks > 0);
+  const banned = [...ch].sort((a, b) => b.bans - a.bans), names = Object.keys(X.explore || {}).sort();
+  const rec = (g, w) => `${w}–${g - w}`;
+  el.innerHTML = `
+    <div class="banner"><div><h1>Champions</h1><p>Presence = picked or banned</p></div><div class="badge ${D.band}">${D.band}</div></div>
+    <div class="chyrons rv">${chyron('Champions played', played.length, X.pool_size ? `of ${X.pool_size} in the game` : `${ch.length} picked or banned`, { to: played.length })}
       ${chyron('Most contested', esc(ch[0]?.name), pct(ch[0]?.presence) + ' presence', { cls: 'white sm' })}
       ${chyron('Most banned', banned[0]?.bans ? esc(banned[0].name) : '–', banned[0]?.bans ? banned[0].bans + ' bans' : 'no ban data', { cls: 'white sm' })}
-      ${chyron('Blue side wins', pct(dr.blue), `${dr.games} games`, { to: (dr.blue || 0) * 100, suf: '%', cls: 'white' })}
-      ${chyron('Banned, never played', never ? esc(never.name) : '–', never ? `${never.bans} bans, 0 picks` : '', { cls: 'white sm' })}</div>
+      ${chyron('Never touched', X.pool_size ? X.never.length : '–', 'not picked, not banned', { to: X.pool_size ? X.never.length : null, cls: 'white' })}
+      ${chyron('Blue side wins', pct(dr.blue), `${dr.games} games`, { to: (dr.blue || 0) * 100, suf: '%', cls: 'white' })}</div>
+    <h2>What happens when a team picks… <small>choose a champion</small></h2>
+    <div class="pills"><select id="cx">${names.map(n => `<option>${esc(n)}</option>`).join('')}</select><span class="note" style="margin:0 0 0 8px">Champions with 3+ games.</span></div><div id="cxcard"></div>
     <div class="cols w32 rv"><div><h2>Contested vs. winning <small>bubble = games played</small></h2><div class="panel"><div id="sc"></div></div></div>
     <div><h2>Most reliable winners</h2><div id="rel"></div><p class="note">Ranked by the low end of a 95% interval, so a 2–0 fluke can't top the list.</p></div></div>
     <h2>Every champion <small>click a column to sort</small></h2><div id="tbl"></div>
-    <h2>Draft ${dr.drafts ? `<small>${dr.drafts} drafts from the league site's draft tool</small>` : ''}</h2>
-    <div class="cols rv"><div id="bans"></div><div id="prio"></div></div>
-    <div class="cols rv" style="margin-top:22px"><div class="panel"><h3>Which roles get locked first</h3><p class="note" style="margin-top:-4px">Share of each role's picks by draft slot</p><div id="slot"></div></div>
-    <div class="panel"><h3>Blue side win rate by week</h3><p class="note" style="margin-top:-4px">Blue side has first pick</p><div id="side"></div></div></div>`;
+    <div class="cols rv"><div><h2>Best duos <small>same team, 4+ games together</small></h2><div id="duo"></div></div>
+    <div><h2>Lopsided lanes <small>same role, 3+ meetings</small></h2><div id="mu"></div></div></div>
+    <div class="cols rv"><div><h2>Signature picks <small>most games by one player on one champion</small></h2><div id="sig"></div></div>
+    <div><h2>Left on the bench</h2>${X.pool_size ? `<h3>Never picked or banned (${X.never.length})</h3><div class="chips">${X.never.map(n => `<span>${esc(n)}</span>`).join('') || '<span>none — everything saw play</span>'}</div>
+      <h3 style="margin-top:14px">Banned but never played (${(X.never_picked_only || []).length})</h3><div class="chips">${(X.never_picked_only || []).map(n => `<span class="b">${esc(n)}</span>`).join('') || '<span>none</span>'}</div>` : '<p class="note">Champion list unavailable for this build.</p>'}</div></div>`;
+  const card = n => { const c = X.explore[n]; if (!c) { $('#cxcard', el).innerHTML = ''; return; }
+    const li = (xs, f) => xs.length ? xs.map(f).join('') : '<div class="kv"><span>not enough games</span></div>';
+    $('#cxcard', el).innerHTML = `<div class="cx"><div class="hero"><div class="k">${ROLE[c.role] || ''} · picked ${c.g} times${c.bans ? ' · banned ' + c.bans : ''}</div><div class="n">${esc(n)}</div>
+        <div class="m"><img alt="" data-champ="${esc(c.key)}">Teams that pick it win</div><div class="big" data-to="${(c.w / c.g * 100).toFixed(0)}" data-suf="%">0</div>
+        <div class="stats"><div>${rec(c.g, c.w)}<small>Record</small></div><div>${c.blue[1] ? pct(c.blue[0] / c.blue[1]) : '–'}<small>Blue side (${c.blue[1]})</small></div><div>${c.red[1] ? pct(c.red[0] / c.red[1]) : '–'}<small>Red side (${c.red[1]})</small></div>
+        <div>${c.mins ? num(c.mins, 1) + 'm' : '–'}<small>Avg game</small></div><div>${c.slot ? num(c.slot, 1) : '–'}<small>Avg pick slot</small></div></div></div>
+      <div class="panel"><h3>Who plays it</h3>${li(c.players, p => `<div class="kv"><span>${esc(p.p)}</span><b>${rec(p.g, p.w)}</b></div>`)}
+        <h3 style="margin-top:12px">Wins most alongside</h3>${li(c.with, p => `<div class="kv"><span>${esc(p.c)}</span><b>${rec(p.g, p.w)}</b></div>`)}</div>
+      <div class="panel"><h3>Lane matchups it wins</h3>${li(c.beats.filter(p => p.w / p.g > .5), p => `<div class="kv"><span>vs ${esc(p.c)}</span><b class="up">${rec(p.g, p.w)}</b></div>`)}
+        <h3 style="margin-top:12px">Lane matchups it loses</h3>${li(c.loses.filter(p => p.w / p.g < .5), p => `<div class="kv"><span>vs ${esc(p.c)}</span><b class="down">${rec(p.g, p.w)}</b></div>`)}</div></div>`;
+    $('#cxcard', el).querySelectorAll('[data-to]').forEach(countUp); champIcons(); };
+  if (names.length) { const first = ch.find(c => X.explore[c.name])?.name || names[0]; $('#cx', el).value = first; $('#cx', el).onchange = e => card(e.target.value); card(first); }
   const min = Math.min(5, Math.max(...played.map(c => c.picks), 1)), sc = played.filter(c => c.picks >= min);
   const lab = new Set([...[...sc].sort((a, b) => b.presence - a.presence).slice(0, 7), ...[...sc].sort((a, b) => Math.abs(b.wr - .5) * Math.sqrt(b.picks) - Math.abs(a.wr - .5) * Math.sqrt(a.picks)).slice(0, 5)].map(c => c.name));
   scatter($('#sc', el), sc.map(c => ({ x: c.presence * 100, y: c.wr * 100, r: Math.max(4, Math.sqrt(c.picks) * 2.4), color: c.wr >= .5 ? '#4f8ff7' : '#e5484d', label: lab.has(c.name) ? c.name : '', tip: `<b>${esc(c.name)}</b><br>${c.wins}W in ${c.picks} games (${pct(c.wr)})<br>${c.bans} bans · ${pct(c.presence)} presence` })),
     { xl: 'Presence (pick + ban)', yl: 'Win rate', xf: d => d + '%', yf: d => d + '%', hline: 50, yDomain: [0, 100], h: 400, from: 50 });
   $('#rel', el).innerHTML = hbars([...sc].sort((a, b) => b.wlo - a.wlo).slice(0, 10).map(c => ({ label: c.name, value: c.wr, text: `${pct(c.wr)}  ·  ${c.wins}–${c.picks - c.wins}` })));
   sortable($('#tbl', el), [{ k: 'name', label: 'Champion', cls: 'team' }, { k: 'role', label: 'Role', f: v => ROLE[v] || '–' },
-    { k: 'presence', label: 'Presence', num: 1, html: r => cellBar(r.presence, 1, pct(r.presence)) }, { k: 'picks', label: 'Picks', num: 1 }, { k: 'bans', label: 'Bans', num: 1 }, { k: 'wins', label: 'Wins', num: 1 },
-    { k: 'wr', label: 'Win%', num: 1, f: (v, r) => r.picks ? pct(v) : '–' }, { k: 'kda', label: 'KDA', num: 1, f: (v, r) => r.picks ? num(v, 2) : '–' }, { k: 'players', label: 'Players', num: 1 }, { k: 'gd15', label: 'GD@15', num: 1, f: v => v == null ? '–' : sign(v) }], ch, { key: 'presence', limit: 15 });
+    { k: 'presence', label: 'Presence', num: 1, html: r => cellBar(r.presence, ch[0]?.presence || 1, pct(r.presence)) }, { k: 'picks', label: 'Picks', num: 1 }, { k: 'bans', label: 'Bans', num: 1 }, { k: 'wins', label: 'Wins', num: 1 },
+    { k: 'wr', label: 'Win%', num: 1, f: (v, r) => r.picks ? pct(v) : '–' }, { k: 'kda', label: 'KDA', num: 1, f: (v, r) => r.picks ? num(v, 2) : '–' }, { k: 'players', label: 'Players', num: 1 }, { k: 'gd15', label: 'GD@15', num: 1, f: v => v == null ? '–' : sign(v) }], ch,
+    { key: 'presence', limit: 15, onRow: r => { if (X.explore[r.name]) { $('#cx', el).value = r.name; card(r.name); $('#cx', el).scrollIntoView({ behavior: 'smooth', block: 'center' }); } } });
+  $('#duo', el).innerHTML = (X.duos || []).length ? hbars(X.duos.map(d => ({ label: `${d.a} + ${d.b}`, value: d.w / d.g, text: `${rec(d.g, d.w)}` })), { color: 'var(--blue)' }) : '<p class="note">No pair has 4 games together yet.</p>';
+  $('#mu', el).innerHTML = (X.matchups || []).length ? hbars(X.matchups.map(d => ({ label: `${d.a} over ${d.b}`, value: d.w / d.g, text: `${rec(d.g, d.w)}` }))) : '<p class="note">No matchup has 3 meetings yet.</p>';
+  $('#sig', el).innerHTML = (X.signature || []).length ? hbars(X.signature.map(s => ({ label: `${s.p} · ${s.c}`, value: s.g, text: `${s.g} games  ·  ${rec(s.g, s.w)}`, color: T(s.t).color }))) : '';
+};
+
+pages.draft = el => {
+  const D = state.D, ch = D.champions || [], dr = D.draft || {}, I = D.items || {}, banned = [...ch].sort((a, b) => b.bans - a.bans), sf = I.sunfire;
+  el.innerHTML = `
+    <div class="banner"><div><h1>Draft & Items</h1><p>${dr.drafts ? dr.drafts + ' drafts from the league site\'s draft tool' : 'Bans and builds'}</p></div><div class="badge ${D.band}">${D.band}</div></div>
+    <div class="cols rv"><div id="bans"></div><div id="prio"></div></div>
+    <div class="cols rv" style="margin-top:22px"><div class="panel"><h3>Which roles get locked first</h3><p class="note" style="margin-top:-4px">Share of each role's picks by draft slot · blue numbers are blue side's picks</p><div id="slot"></div></div>
+    <div class="panel"><h3>Blue side win rate by week</h3><p class="note" style="margin-top:-4px">Blue side has first pick</p><div id="side"></div></div></div>
+    <h2>Items <small>completed items in the final build · click a column to sort</small></h2>
+    <div class="cols w32 rv"><div id="items"></div><div><div id="iwin"></div><p class="note">Items in a final build are a result as much as a cause — winning teams get to finish expensive items, losing teams end on defensive ones.</p>
+      ${sf ? `<div class="sunfire"><div class="k">Slamurai's Sunfire Counter</div><div class="q">"This item is grief" — Slamurai, probably</div><div class="row"><div class="big" data-to="${sf.total}">0</div><div><b>${pct(sf.wr)}</b><small>win rate</small></div><div><b class="up">${sf.wins}</b><small>wins</small></div><div><b class="down">${sf.losses}</b><small>losses</small></div></div><div class="q" style="margin-top:8px">Repeat offenders: ${sf.top.map(p => `${esc(p.p)} ×${p.n}`).join(' · ')}</div></div>` : ''}</div></div>`;
   $('#bans', el).innerHTML = banned[0]?.bans ? hbars(banned.slice(0, 10).map(c => ({ label: c.name, value: c.bans, text: `${c.bans}`, color: 'var(--red)' })), { title: 'Most banned' }) : '<p class="note">No ban data recorded for this season.</p>';
   $('#prio', el).innerHTML = dr.priority?.length ? hbars(dr.priority.slice(0, 10).map(c => ({ label: c.name, value: c.r1, text: `${c.r1}${c.wr != null ? '  ·  ' + pct(c.wr) + ' wins' : ''}` })), { title: 'First-rotation picks', sub: 'Taken with one of the first three picks of a draft' }) : '';
   if (dr.role_slot?.length) {
@@ -483,6 +561,51 @@ pages.champions = el => {
     const len = p.node().getTotalLength(); p.attr('stroke-dasharray', len).attr('stroke-dashoffset', len).transition().duration(REDUCED ? 0 : 1600).ease(d3.easeCubicInOut).attr('stroke-dashoffset', 0);
     withTip(svg.selectAll('circle').data(sw).join('circle').attr('cx', d => x(d.week)).attr('cy', d => y(d.blue * 100)).attr('r', 5).attr('fill', 'var(--blue)').attr('stroke', '#080b12').attr('stroke-width', 2), d => `Week ${d.week}: blue won <b>${pct(d.blue)}</b> of ${d.games} games`);
   }
+  const items = I.items || [];
+  if (items.length) {
+    sortable($('#items', el), [{ k: 'name', label: 'Item', cls: 'team' }, { k: 'builds', label: 'Builds', num: 1 }, { k: 'rate', label: 'Pick rate', num: 1, tip: 'Share of all player-games that finished with this item', html: r => cellBar(r.rate, Math.max(...items.map(i => i.rate)), pct(r.rate, 1)) },
+      { k: 'wr', label: 'Win rate', num: 1, html: r => `<span class="${r.wr >= .55 ? 'up' : r.wr <= .45 ? 'down' : ''}">${pct(r.wr)}</span>` }], items, { key: 'builds', limit: 15 });
+    const q = items.filter(i => i.builds >= Math.max(10, items[0].builds / 12)), ext = [...[...q].sort((a, b) => b.wr - a.wr).slice(0, 5), ...[...q].sort((a, b) => a.wr - b.wr).slice(0, 5).reverse()];
+    $('#iwin', el).innerHTML = hbars(ext.map(i => ({ label: i.name, value: i.wr, text: `${pct(i.wr)}  ·  ${i.builds} builds`, color: i.wr >= .5 ? 'var(--blue)' : 'var(--red)' })), { title: 'Winning and losing builds', sub: 'Best and worst win rates among commonly built items' });
+  } else $('#items', el).innerHTML = '<p class="note">No item data for this season.</p>';
+};
+
+pages.wins = el => {
+  const D = state.D, W = D.wins || { edges: [] }, cards = D.styles || [];
+  const ladder = (rows, lab) => rows.length ? hbars(rows.map(r => ({ label: lab(r.n), value: Math.max(r.wr, .004), text: `${pct(r.wr)}  ·  ${r.games} games`, color: r.wr >= .5 ? 'var(--gold)' : '#7a6410' }))) : '<p class="note">Objective counts aren\'t recorded for this season.</p>';
+  const h1 = W.herald?.find(h => h.n === 1), b0 = W.barons?.find(b => b.n === 0), b1 = W.barons?.find(b => b.n === 1), fb = W.edges.find(e => e.label === 'First blood');
+  el.innerHTML = `
+    <div class="banner"><div><h1>How Games Are Won</h1><p>Objectives, leads and what each team leans on</p></div><div class="badge ${D.band}">${D.band}</div></div>
+    <div class="chyrons rv">${W.soul ? chyron('Four dragons', pct(W.soul.wr), `win rate · ${W.soul.games} games`, { to: W.soul.wr * 100, suf: '%' }) : ''}
+      ${b1 ? chyron('Take a Baron', pct(b1.wr), `vs ${pct(b0?.wr)} with none`, { to: b1.wr * 100, suf: '%', cls: 'white' }) : ''}
+      ${h1 ? chyron('Take the Herald', pct(h1.wr), `${h1.games} games`, { to: h1.wr * 100, suf: '%', cls: 'white' }) : ''}
+      ${W.lead_hold != null ? chyron('Lead at 15 holds', pct(W.lead_hold), 'any gold lead', { to: W.lead_hold * 100, suf: '%', cls: 'white' }) : ''}
+      ${fb ? chyron('First blood', pct(fb.wr), fb.wr < .6 ? 'barely better than a coin flip' : 'win rate', { to: fb.wr * 100, suf: '%', cls: 'white' }) : ''}</div>
+    <div class="cols rv"><div><h2>What the winner had <small>win rate of the team that got each edge</small></h2><div id="edges"></div></div>
+    <div><h2>Dragons <small>win rate by drakes taken</small></h2>${ladder(W.dragons || [], n => n >= 4 ? '4+ (soul)' : n + (n === 1 ? ' dragon' : ' dragons'))}
+      <h2>Barons</h2>${ladder(W.barons || [], n => n >= 2 ? '2+ barons' : n + (n === 1 ? ' baron' : ' barons'))}</div></div>
+    ${W.comebacks?.length ? `<h2>Biggest comebacks <small>largest gold deficit at 15:00 that still ended in a win</small></h2><div class="grid rv">${W.comebacks.map(c => `<div class="story"><div class="t">WEEK ${c.week} · ${num(c.mins)} MIN</div><div class="x"><b>${esc(T(c.team).name)}</b> were <b class="down">${num(c.deficit)}</b> gold down to ${esc(T(c.opp).name)} at 15:00 — and won.</div></div>`).join('')}</div>` : ''}
+    <h2>How each team wins <small>tags are earned from the numbers · click a card for the full profile</small></h2>
+    <div class="styles rv">${cards.map(c => { const r = ([w, g]) => g ? `${w}–${g - w}` : '–', roles = Object.entries(c.dmg);
+      return `<div class="sty" data-t="${c.t}" style="border-top-color:${T(c.t).color}"><div class="sn">${dot(c.t)}${esc(T(c.t).name)}<em>${pct(c.win_pct)}</em></div>
+        <div class="tags">${c.tags.map(t => `<span title="${esc(t.why)}">${esc(t.tag)}</span>`).join('')}</div><div class="why">${c.tags.map(t => esc(t.why)).join(' · ')}</div>
+        <div class="q4"><div><b>${r(c.ahead)}</b><small>ahead at 15</small></div><div><b>${r(c.behind)}</b><small>behind at 15</small></div><div><b>${r(c.short)}</b><small>under 28 min</small></div><div><b>${r(c.long)}</b><small>over 36 min</small></div></div>
+        ${roles.length ? `<div class="dmg" title="Share of team damage by role">${roles.map(([k, v]) => `<i data-w="${(v * 100).toFixed(1)}%" style="background:${ROLE_COLOR[Object.keys(ROLE).find(x => ROLE[x] === k)]}" title="${k}: ${pct(v)} of team damage"><span>${v >= .14 ? k : ''}</span></i>`).join('')}</div>` : ''}</div>`; }).join('')}</div>
+    <p class="note">Records are games. The coloured bar is each role's share of the team's damage to champions.</p>`;
+  $('#edges', el).innerHTML = W.edges.length ? hbars(W.edges.map(e => ({ label: e.label, value: e.wr, text: `${pct(e.wr)}  ·  ${e.n} games` }))) : '<p class="note">Not enough data.</p>';
+  el.querySelectorAll('.sty').forEach(c => c.onclick = () => teamProfile(c.dataset.t));
+};
+
+pages.records = el => {
+  const D = state.D, F = D.fun || { awards: [], records: [] };
+  el.innerHTML = `
+    <div class="banner"><div><h1>Record Book</h1><p>Season awards nobody asked for</p></div><div class="badge ${D.band}">${D.band}</div></div>
+    <h2>Season awards <small>players with ${F.min_games || 3}+ games</small></h2>
+    <div class="awards rv">${F.awards.map((a, i) => `<div class="aw" style="animation-delay:${i * 40}ms"><div class="at">${esc(a.title)}</div><div class="ab">${esc(a.blurb)}</div>
+      <div class="ap">${dot(a.team)}${esc(a.player)}</div><div class="av">${a.value} <small>${esc(a.unit)}</small></div>
+      <div class="an">${a.next.map((n, k) => `${k + 2}. ${esc(n.player)} ${n.value}`).join(' · ')}</div></div>`).join('')}</div>
+    <h2>Single-game records</h2>
+    <div class="grid rv">${F.records.map(r => `<div class="story"><div class="t">${esc(r.title.toUpperCase())}</div><div class="x"><b style="color:var(--gold);font-family:var(--head);font-size:21px">${esc(r.value)}</b><br>${r.player ? `<b>${esc(r.player)}</b> (${esc(r.champ)}, ${esc(T(r.team).name)}) vs ${esc(T(r.opp).name)}` : `<b>${esc(T(r.team).name)}</b> beat ${esc(T(r.opp).name)}`} · ${r.playoff ? 'playoffs' : 'week ' + r.week}</div></div>`).join('')}</div>`;
 };
 
 pages.forecasts = el => {

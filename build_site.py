@@ -29,6 +29,10 @@ from app.league import (
     load_seasons, player_table, team_table,
 )
 from app.viz import team_colors
+from app.extras import (
+    champion_extras, fun_awards, item_table, real_bracket, seeded_bracket, team_styles,
+    title_odds, win_conditions,
+)
 
 OUT = Path(__file__).resolve().parent / "docs" / "data"
 
@@ -110,6 +114,25 @@ def bracket(seeds: list, cross: bool) -> list:
     return out
 
 
+def _champion_keys() -> set:
+    """Every champion in the game (Data Dragon), or empty when offline."""
+    try:
+        from app.data_loader import _ddragon_data
+        return set(_ddragon_data()[2].values())
+    except Exception:
+        return set()
+
+
+def _round_formats(db: str, sid: str) -> dict:
+    import sqlite3
+    try:
+        with sqlite3.connect(db) as conn:
+            row = conn.execute("SELECT roundFormats FROM playoff_config WHERE seasonId = ?", (sid,)).fetchone()
+        return json.loads(row[0]) if row and row[0] else {}
+    except Exception:
+        return {}
+
+
 def build_season(db: str, sid: str) -> dict:
     S = Season(db, sid)
     colors = team_colors(S.teams)
@@ -167,10 +190,25 @@ def build_season(db: str, sid: str) -> dict:
             "teams": [{"t": r.team_id, "make": r.make_playoffs, "avg_seed": r.avg_seed,
                        "seeds": [getattr(r, f"seed_{k}") for k in range(1, spots + 1)], "miss": r.miss}
                       for r in probs.sort_values("avg_seed").itertuples()],
+            "pins": None if not sim["remaining"] else {
+                "n": min(sim["n_sims"], 2000), "teams": sim["team_ids"],
+                "outcomes": ["".join(map(str, sim["sim_outcomes"][:2000, s]))
+                             for s in range(len(sim["remaining"]))],
+                "seeds": ["".join(chr(48 + int(v)) for v in sim["sim_seeds"][:2000, i])
+                          for i in range(len(sim["team_ids"]))],
+            },
             "leverage": recs(playoff.leverage(sim).assign(a=lambda d: d["swing"].abs())
                              .sort_values("a", ascending=False).drop_duplicates("seriesId").head(5),
                              ["week", "team_id", "t1", "t2", "if_t1", "if_t2"]),
         }
+    if S.active:
+        rdm = dict(zip(lad["team_id"], lad["rd"]))
+        br = real_bracket(S)
+        out["bracket_real"] = br is not None
+        if br is None and len(seeds) >= 2:
+            br = seeded_bracket([tid for _, tid, _ in seeds], _round_formats(db, sid))
+        if br:
+            out["title"] = title_odds(S, rating, rdm, br)
     po = S.playoffs[S.playoffs["status"] == "COMPLETED"]
     out["playoff_results"] = [
         {"label": str(r.label or "Playoffs").title(), "t1": r.team1Id, "t2": r.team2Id,
@@ -268,6 +306,13 @@ def build_season(db: str, sid: str) -> dict:
         draft["priority"] = recs(pr[pr["r1"] > 0].nlargest(12, "r1"), ["name", "r1", "picks", "wr"])
         draft["role_slot"] = recs(dr["role_slot"], ["role", "pick_no", "n"])
     out["draft"] = draft
+
+    # ── the fun stuff ──────────────────────────────────────────────────
+    out["wins"] = win_conditions(S)
+    out["styles"] = team_styles(S)
+    out["champ_x"] = champion_extras(S, _champion_keys())
+    out["fun"] = fun_awards(S)
+    out["items"] = item_table(db, S)
     return clean(out)
 
 

@@ -99,15 +99,61 @@ function sortable(host, cols, rows, o = {}) {
   const draw = () => {
     const sorted = [...rows].sort((a, b) => { const x = a[key], y = b[key]; if (x == null) return 1; if (y == null) return -1; return (typeof x === 'string' ? x.localeCompare(y) : x - y) * (asc ? 1 : -1); });
     host.innerHTML = `<div class="tw"><table><thead><tr>${o.rank ? '<th class="num">#</th>' : ''}${cols.map(c => `<th class="sort ${c.num ? 'num' : ''} ${c.k === key ? 'on' + (asc ? ' asc' : '') : ''}" data-k="${c.k}" title="${esc(c.tip || '')}">${c.label}</th>`).join('')}</tr></thead><tbody>` +
-      sorted.slice(0, limit).map((r, i) => `<tr>${o.rank ? `<td class="num rk">${i + 1}</td>` : ''}${cols.map(c => `<td class="${c.num ? 'num' : ''} ${c.cls || ''}">${c.html ? c.html(r) : c.f ? c.f(r[c.k], r) : esc(r[c.k] ?? '–')}</td>`).join('')}</tr>`).join('') +
+      sorted.slice(0, limit).map((r, i) => `<tr class="${o.onRow ? 'click' : ''}" data-i="${i}">${o.rank ? `<td class="num rk">${i + 1}</td>` : ''}${cols.map(c => `<td class="${c.num ? 'num' : ''} ${c.cls || ''}">${c.html ? c.html(r) : c.f ? c.f(r[c.k], r) : esc(r[c.k] ?? '–')}</td>`).join('')}</tr>`).join('') +
       `</tbody></table></div>${sorted.length > limit ? `<p class="note">Showing ${limit} of ${sorted.length}. <a href="#" data-more>Show all</a></p>` : ''}`;
     host.querySelectorAll('th.sort').forEach(th => th.onclick = () => { const k = th.dataset.k; if (k === key) asc = !asc; else { key = k; asc = typeof rows[0]?.[k] === 'string'; } draw(); });
+    if (o.onRow) host.querySelectorAll('tbody tr').forEach(tr => tr.onclick = () => o.onRow(sorted[+tr.dataset.i]));
     const more = host.querySelector('[data-more]'); if (more) more.onclick = e => { e.preventDefault(); limit = rows.length; draw(); };
     host.querySelectorAll('[data-w]').forEach(b => requestAnimationFrame(() => { b.style.width = b.dataset.w; }));
   };
   draw();
 }
 const cellBar = (v, max, txt) => `<div class="cellbar"><i data-w="${Math.max(2, v / max * 70).toFixed(0)}px" style="width:0"></i><span>${txt}</span></div>`;
+
+/* ── profile drawer ── */
+function drawer(html) {
+  document.querySelector('.scrim')?.remove();
+  const s = document.createElement('div'); s.className = 'scrim';
+  s.innerHTML = `<div class="drawer"><button class="x">CLOSE ✕</button>${html}</div>`;
+  const close = () => { s.classList.remove('in'); setTimeout(() => s.remove(), 250); removeEventListener('keydown', esc_); };
+  const esc_ = e => { if (e.key === 'Escape') close(); };
+  s.onclick = e => { if (e.target === s || e.target.classList.contains('x')) close(); };
+  addEventListener('keydown', esc_); document.body.appendChild(s);
+  requestAnimationFrame(() => { s.classList.add('in'); s.querySelectorAll('[data-w]').forEach(b => b.style.width = b.dataset.w); s.querySelectorAll('[data-to]').forEach(countUp); });
+  champIcons();
+}
+const pctile = (pool, k, v, inv) => { const xs = pool.map(p => p[k]).filter(x => x != null); if (v == null || xs.length < 3) return null; const p = (xs.filter(x => x < v).length + .5 * xs.filter(x => x === v).length) / xs.length; return inv ? 1 - p : p; };
+const pbars = rows => rows.filter(r => r[2] != null).map(([l, v, p]) => `<div class="pb"><div class="l">${l}</div><div class="t"><i class="${p >= .75 ? 'hi' : p <= .25 ? 'lo' : ''}" data-w="${Math.max(3, Math.round(p * 100))}%"></i></div><div class="v">${v}</div><div class="p">${Math.round(p * 100)}</div></div>`).join('');
+function playerProfile(p) {
+  const peers = state.D.players.filter(x => x.role === p.role && x.games >= Math.min(3, p.games)), q = (k, inv) => pctile(peers, k, p[k], inv);
+  drawer(`<div class="hero" style="margin-top:34px"><div class="k">${ROLE[p.role] || 'Player'} · ${esc(p.team)}</div><div class="n">${esc(p.player)}</div>
+    <div class="m">${dot(p.team_id)}Main: ${esc(p.main)} · ${p.champs} champions played</div>
+    <div class="stats"><div>${p.wins}–${p.games - p.wins}<small>Record</small></div><div>${num(p.kda, 2)}<small>KDA</small></div><div data-to="${p.impact ?? 0}">0<small>Impact</small></div><div>${p.salary ?? '–'}<small>Salary</small></div></div></div>
+    <p class="note">Percentile among ${peers.length} ${ROLE[p.role] || ''} players — blue is top quarter, red is bottom quarter.</p>
+    <div class="panel">${pbars([['Impact', num(p.impact), q('impact')], ['KDA', num(p.kda, 2), q('kda')], ['Kill participation', pct(p.kp), q('kp')], ['Damage / min', num(p.dmg_min), q('dmg_min')], ['Gold / min', num(p.gold_min), q('gold_min')],
+      ['CS / min', num(p.cs_min, 1), q('cs_min')], ['Vision / min', num(p.vis_min, 2), q('vis_min')], ['Gold diff @15', p.gd15 == null ? '–' : sign(p.gd15), q('gd15')], ['Deaths / game', num(p.d_g, 1), q('d_g', true)]])}</div>
+    <h3 style="margin-top:20px">Champion pool</h3><div class="tw"><table><thead><tr><th>Champion</th><th class="num">Games</th><th class="num">Record</th><th class="num">Win%</th></tr></thead><tbody>
+    ${(p.pool || []).map(c => `<tr><td class="team">${esc(c.c)}</td><td class="num">${c.g}</td><td class="num">${c.w}–${c.g - c.w}</td><td class="num">${pct(c.w / c.g)}</td></tr>`).join('')}</tbody></table></div>`);
+  document.querySelectorAll('.drawer [data-to] small').length; // count-up replaces text; restore label
+  const im = document.querySelector('.drawer [data-to]'); if (im) { const v = document.createElement('span'); v.dataset.to = im.dataset.to; im.removeAttribute('data-to'); im.innerHTML = ''; im.append(v); im.insertAdjacentHTML('beforeend', '<small>Impact</small>'); countUp(v); }
+}
+function teamProfile(tid) {
+  const D = state.D, ts = D.team_stats || [], me = ts.find(t => t.team_id === tid), w = D.weeks.at(-1), q = (k, inv) => pctile(ts, k, me?.[k], inv);
+  let row, place, grp = '';
+  for (const [g, rows] of Object.entries(D.standings[w])) { const live = rows.filter(r => !r.dropped), i = live.findIndex(r => r.t === tid); if (i >= 0) { row = live[i]; place = i + 1; grp = g === 'all' ? '' : ' in Group ' + g; } }
+  const ord = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][n % 100] || 'th');
+  const make = D.playoff?.teams.find(t => t.t === tid)?.make, R = D.ratings.by_team[tid];
+  const roster = (D.players || []).filter(p => p.team_id === tid).sort((a, b) => b.games - a.games);
+  const res = D.series.filter(s => s.status === 'COMPLETED' && (s.t1 === tid || s.t2 === tid)).sort((a, b) => a.week - b.week);
+  drawer(`<div class="hero" style="margin-top:34px;border-top-color:${T(tid).color}"><div class="k">${row ? ord(place) + grp : ''}</div><div class="n">${esc(T(tid).name)}</div>
+    <div class="m">Roster salary ${T(tid).salary ?? '–'}${D.cap ? ' of ' + D.cap + ' cap' : ''}${row ? ' · ' + [...row.form].map(c => `<span class="pill ${c}">${c}</span>`).join('') : ''}</div>
+    <div class="stats">${row ? `<div>${row.sw}–${row.sl}<small>Series</small></div><div>${row.gw}–${row.gl}<small>Games</small></div>` : ''}${R ? `<div>${num(R.at(-1))}<small>Rating</small></div>` : ''}${make != null ? `<div>${make >= .9995 ? 'IN' : make <= .0005 ? 'OUT' : pct(make)}<small>Playoffs</small></div>` : ''}</div></div>
+    ${me ? `<p class="note">Percentile among ${ts.length} teams — blue is top quarter, red is bottom quarter.</p><div class="panel">${pbars([['Kills / game', num(me.kills, 1), q('kills')], ['Deaths / game', num(me.deaths, 1), q('deaths', true)], ['Gold diff @15', me.gd15 == null ? '–' : sign(me.gd15), q('gd15')],
+      ['First blood', pct(me.fb), q('fb')], ['First tower', pct(me.ft), q('ft')], ['Dragons / game', num(me.dragons, 1), q('dragons')], ['Barons / game', num(me.barons, 1), q('barons')], ['Vision / min', num(me.vis_min, 1), q('vis_min')], ['Champion pool', me.champ_pool, q('champ_pool')]])}</div>` : ''}
+    <h3 style="margin-top:20px">Who played</h3><div class="tw"><table><thead><tr><th>Player</th><th>Role</th><th class="num">GP</th><th class="num">KDA</th><th class="num">Impact</th><th>Main</th></tr></thead><tbody>
+    ${roster.map(p => `<tr><td class="team">${esc(p.player)}</td><td>${ROLE[p.role] || '–'}</td><td class="num">${p.games}</td><td class="num">${num(p.kda, 2)}</td><td class="num">${num(p.impact)}</td><td>${esc(p.main)}</td></tr>`).join('')}</tbody></table></div>
+    <h3 style="margin-top:20px">Results</h3>${res.map(s => bug({ ...s, wpm: null, wpc: null, label: 'Week ' + s.week })).join('<div style="height:6px"></div>')}`);
+}
 
 /* ── standings table (animated between weeks with FLIP) ── */
 function standingsHtml(rows, cut, o = {}) {
@@ -141,6 +187,7 @@ function standingsBlock(host, week, o = {}) {
   const groups = Object.keys(st);
   if (!host.dataset.built) { host.innerHTML = `<div class="cols">${groups.map(g => `<div>${groups.length > 1 ? `<h3>Group ${esc(g)}</h3>` : ''}<div data-g="${g}"></div></div>`).join('')}</div>`; if (groups.length === 1) host.firstChild.style.gridTemplateColumns = '1fr'; host.dataset.built = 1; }
   groups.forEach(g => flip(host.querySelector(`[data-g="${g}"]`), standingsHtml(st[g], groups.length > 1 ? D.spots / 2 : D.spots, { make, compact: o.compact })));
+  host.querySelectorAll('tr[data-t]').forEach(tr => { tr.classList.add('click'); tr.onclick = () => teamProfile(tr.dataset.t); });
 }
 
 /* ── the season replay: rating race + traced lines, one shared scrubber ── */
@@ -333,7 +380,7 @@ pages.players = el => {
     <div class="pills" id="pf">${['ALL', ...Object.keys(ROLE)].map(r => `<button data-r="${r}" class="${r === 'ALL' ? 'on' : ''}">${ROLE[r] || 'All'}</button>`).join('')}
       <label>Min games <b id="mg">${f.min}</b></label><input type="range" id="min" min="1" max="${maxG}" value="${f.min}" style="width:150px">
       <input type="search" id="q" placeholder="Find a player or team…" style="margin-left:auto"></div>
-    <div id="tbl"></div>
+    <div id="tbl"></div><p class="note">Click a player for their profile.</p>
     <div class="cols rv"><div><h2>Lane bullies <small>avg gold lead on the lane opponent at 15:00</small></h2><div id="lane"></div></div>
     <div><h2>Price vs. production <small>above the line = bargain</small></h2><div class="panel"><div id="val"></div><p class="note" id="valnote"></p></div></div></div>`;
   const cols = [
@@ -346,7 +393,7 @@ pages.players = el => {
     { k: 'salary', label: 'Salary', num: 1, f: v => v ?? '–' }, { k: 'main', label: 'Main' }];
   const draw = () => {
     const rows = all.filter(p => p.games >= f.min && (f.role === 'ALL' || p.role === f.role) && (!f.q || (p.player + ' ' + p.team).toLowerCase().includes(f.q)));
-    sortable($('#tbl', el), cols, rows, { key: 'impact', rank: true, limit: 25 });
+    sortable($('#tbl', el), cols, rows, { key: 'impact', rank: true, limit: 25, onRow: playerProfile });
     const lane = rows.filter(p => p.gd15 != null && p.lane_games >= 3).sort((a, b) => b.gd15 - a.gd15).slice(0, 10);
     $('#lane', el).innerHTML = lane.length ? hbars(lane.map(p => ({ label: `${p.player} · ${ROLE[p.role] || ''}`, value: p.gd15, text: sign(p.gd15), color: 'var(--blue)', title: `${p.team}: ${sign(p.csd15, 1)} CS over ${p.lane_games} games` }))) : '<p class="note">No 15-minute data for this selection.</p>';
     $('#lane .rv', el)?.classList.add('in'); $('#lane', el).querySelectorAll('[data-w]').forEach(b => requestAnimationFrame(() => b.style.width = b.dataset.w));
@@ -376,7 +423,7 @@ pages.teams = el => {
     <div class="banner"><div><h1>Teams</h1><p>How each team actually plays</p></div><div class="badge ${D.band}">${D.band}</div></div>
     <div class="cols w32 rv"><div><h2>Early game vs. results <small>who closes, who throws</small></h2><div class="panel"><div id="quad"></div></div></div>
     <div><h2>Is a lead at 15:00 safe?</h2><div id="lead"></div><p class="note">Win rate of the team ahead on gold at 15 minutes, by the size of the lead.</p></div></div>
-    <h2>Every team <small>per-game averages · click a column to sort</small></h2><div id="tbl"></div>`;
+    <h2>Every team <small>per-game averages · click a row for the team profile</small></h2><div id="tbl"></div>`;
   const q = ts.filter(t => t.gd15 != null);
   if (q.length) scatter($('#quad', el), q.map(t => ({ x: t.gd15, y: t.win_pct * 100, r: 8, color: T(t.team_id).color, label: T(t.team_id).name, tip: `<b>${esc(t.team)}</b><br>${sign(t.gd15)} gold at 15 · ${pct(t.win_pct)} wins (${t.games} games)` })),
     { xl: 'Team gold difference at 15:00', yl: 'Game win rate', yf: d => d + '%', xf: d => sign(d), hline: 50, vline: 0, h: 420, from: 50 });
@@ -388,7 +435,7 @@ pages.teams = el => {
     { k: 'fb', label: 'FB%', num: 1, tip: 'First blood rate', f: v => pct(v) }, { k: 'ft', label: 'FT%', num: 1, tip: 'First tower rate', f: v => pct(v) },
     { k: 'dragons', label: 'Drakes', num: 1, f: v => num(v, 1) }, { k: 'barons', label: 'Barons', num: 1, f: v => num(v, 1) }, { k: 'turrets', label: 'Turrets', num: 1, f: v => num(v, 1) },
     { k: 'vis_min', label: 'Vis/m', num: 1, f: v => num(v, 1) }, { k: 'blue_wr', label: 'Blue W%', num: 1, f: v => pct(v) }, { k: 'red_wr', label: 'Red W%', num: 1, f: v => pct(v) },
-    { k: 'champ_pool', label: 'Champs', num: 1 }, { k: 'mins', label: 'Avg time', num: 1, f: v => clock(v * 60) }], ts, { key: 'win_pct' });
+    { k: 'champ_pool', label: 'Champs', num: 1 }, { k: 'mins', label: 'Avg time', num: 1, f: v => clock(v * 60) }], ts, { key: 'win_pct', onRow: r => teamProfile(r.team_id) });
 };
 
 pages.champions = el => {

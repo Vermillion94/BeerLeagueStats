@@ -240,7 +240,12 @@ def build_season(db: str, sid: str) -> dict:
     pl = player_table(ps)
     if not pl.empty:
         pl = pl.merge(impact_table(ps)[["pid", "impact"]], on="pid", how="left")
-        out["players"] = recs(pl, ["player", "team", "team_id", "role", "games", "wins", "impact", "kda",
+        pool = (ps.groupby(["pid", "champion"]).agg(g=("win", "size"), w=("win", "sum")).reset_index()
+                .sort_values(["g", "w"], ascending=False))
+        pools = {pid: [{"c": r.champion, "g": int(r.g), "w": int(r.w)} for r in d.head(6).itertuples()]
+                 for pid, d in pool.groupby("pid")}
+        pl["pool"] = pl["pid"].map(pools)
+        out["players"] = recs(pl, ["pool", "player", "team", "team_id", "role", "games", "wins", "impact", "kda",
                                    "k_g", "d_g", "a_g", "kp", "dmg_share", "dmg_min", "gold_min", "cs_min",
                                    "vis_min", "gd15", "csd15", "lane_games", "salary", "main", "champs"])
     tt = team_table(S)

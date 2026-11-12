@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beer League Stats</title>
+<meta name="description" content="Standings, playoff odds, power rankings and deep stats for the Beer League.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="ticker"><div class="ticker-tag">LATEST</div><div class="ticker-track" id="ticker"></div></div>
+<div class="wrap">
+  <header class="mast">
+    <div class="brand">
+      <div class="brand-mark">BL</div>
+      <div><div class="brand-name">Beer League <span>Stats</span></div><div class="brand-sub" id="sub">Loading…</div></div>
+    </div>
+    <div class="controls">
+      <div class="seg" id="bands"></div>
+      <select id="season" aria-label="Season"></select>
+      <div class="meta" id="meta"></div>
+    </div>
+  </header>
+  <nav id="nav"></nav>
+  <main id="page"></main>
+  <footer class="note" id="foot"></footer>
+</div>
+<div class="tip" id="tip"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

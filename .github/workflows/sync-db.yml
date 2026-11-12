@@ -30,10 +30,19 @@ jobs:
           # Keep only the file we just downloaded
           ls -1 *.db | grep -v "$DB_FILE" | xargs -r rm -f
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Rebuild the static site data (docs/data/*.json)
+        run: |
+          pip install --quiet "pandas>=2.2,<3" numpy plotly
+          python build_site.py
+
       - name: Check if anything changed
         id: check
         run: |
-          git add data/
+          git add data/ docs/data/
           if git diff --cached --quiet; then
             echo "changed=false" >> $GITHUB_OUTPUT
           else

@@ -282,6 +282,69 @@ function scatter(host, pts, o) {
   host.closest('.rv') ? host.closest('.rv').addEventListener('reveal', go, { once: true }) : go();
 }
 
+/* ── the lab: gold-lead curve and raw-vs-even dumbbells ── */
+function goldCurve(host, G) {
+  const W = 720, H = 380, m = { t: 34, r: 20, b: 44, l: 48 }, sig = z => 1 / (1 + Math.exp(-z));
+  const xmax = Math.min(10000, Math.max(6000, d3.max(G.dots, d => d.x)));
+  const x = d3.scaleLinear([0, xmax], [m.l, W - m.r]), y = d3.scaleLinear([40, 100], [H - m.b, m.t]).clamp(true);
+  const svg = d3.select(host).append('svg').attr('viewBox', `0 0 ${W} ${H}`);
+  svg.append('g').attr('class', 'grid').attr('transform', `translate(${m.l},0)`).call(d3.axisLeft(y).tickValues([50, 60, 70, 80, 90, 100]).tickSize(-(W - m.l - m.r)).tickFormat(''));
+  svg.append('g').attr('class', 'axis').attr('transform', `translate(${m.l - 4},0)`).call(d3.axisLeft(y).tickValues([50, 60, 70, 80, 90, 100]).tickSize(0).tickFormat(d => d + '%'));
+  svg.append('g').attr('class', 'axis').attr('transform', `translate(0,${H - m.b + 6})`).call(d3.axisBottom(x).ticks(8).tickSize(0).tickFormat(d => d ? d / 1000 + 'k' : 'even'));
+  svg.append('text').attr('x', (m.l + W - m.r) / 2).attr('y', H - 4).attr('text-anchor', 'middle').text('Team gold lead at 15:00');
+  svg.append('text').attr('transform', `translate(12,${(m.t + H - m.b) / 2}) rotate(-90)`).attr('text-anchor', 'middle').text('Chance the leader wins');
+  // every game: a tick on the top rail if the lead held, on the bottom rail if it was thrown
+  const rail = w => w ? m.t - 14 : H - m.b - 9;
+  const ticks = svg.selectAll('rect.g').data(G.dots).join('rect').attr('class', 'g').attr('x', d => x(Math.min(d.x, xmax)) - 1.5).attr('width', 3).attr('height', 12).attr('y', d => rail(d.w)).attr('rx', 1)
+    .attr('fill', d => d.w ? '#FFD700' : '#e5484d').attr('opacity', 0);
+  svg.selectAll('rect.hit').data(G.dots).join('rect').attr('class', 'hit').attr('x', d => x(Math.min(d.x, xmax)) - 4).attr('width', 8).attr('height', 18).attr('y', d => rail(d.w) - 3).attr('fill', 'transparent')
+    .call(withTip, d => `<b>${esc(T(d.t).name)}</b> led ${esc(T(d.o).name)} by <b>${num(d.x)}</b> gold<br>Week ${d.wk} · ${d.w ? 'held on' : '<b>threw it</b>'}`);
+  svg.append('text').attr('x', W - m.r).attr('y', m.t - 20).attr('text-anchor', 'end').text('each tick is a game · gold = lead held');
+  svg.append('text').attr('x', W - m.r).attr('y', H - m.b - 14).attr('text-anchor', 'end').attr('fill', '#f0a0a3').text('red = lead thrown');
+  const pts = d3.range(0, xmax + 1, 100).map(g => [x(g), y(sig(G.k * g / 1000) * 100)]);
+  const path = svg.append('path').attr('fill', 'none').attr('stroke', '#FFD700').attr('stroke-width', 2.5).attr('d', d3.line().curve(d3.curveMonotoneX)(pts));
+  const len = path.node().getTotalLength(); path.attr('stroke-dasharray', len).attr('stroke-dashoffset', len);
+  const guide = (g, lab) => { if (g == null || g > xmax) return; const gy = y(sig(G.k * g / 1000) * 100);
+    const gg = svg.append('g').attr('opacity', 0).attr('class', 'guide');
+    gg.append('line').attr('x1', x(g)).attr('x2', x(g)).attr('y1', gy).attr('y2', H - m.b).attr('stroke', '#94a3b8').attr('stroke-dasharray', '3 4');
+    gg.append('circle').attr('cx', x(g)).attr('cy', gy).attr('r', 4).attr('fill', '#080b12').attr('stroke', '#FFD700').attr('stroke-width', 2);
+    gg.append('text').attr('x', x(g) + 8).attr('y', gy + 16).attr('class', 'lab').text(lab); };
+  guide(G.need75, `75% at ${num(G.need75 / 100) / 10}k`); guide(G.need90, `90% at ${num(G.need90 / 100) / 10}k`);
+  const bins = svg.selectAll('circle.b').data(G.bins).join('circle').attr('class', 'b').attr('cx', d => x(Math.min(d.x * 1000, xmax))).attr('cy', d => y(d.wr * 100)).attr('r', 0)
+    .attr('fill', '#4f8ff7').attr('stroke', '#080b12').attr('stroke-width', 2);
+  withTip(bins, d => `Leads of ${d.lo * 1000 ? num(d.lo * 1000) : '0'}–${d.hi > 50 ? '∞' : num(d.hi * 1000)} gold<br><b>${pct(d.wr)}</b> held · ${d.n} games`);
+  svg.append('circle').attr('cx', m.l + 10).attr('cy', m.t + 10).attr('r', 5).attr('fill', '#4f8ff7');
+  svg.append('text').attr('x', m.l + 20).attr('y', m.t + 14).text('what actually happened (bigger = more games)');
+  svg.append('line').attr('x1', m.l + 4).attr('x2', m.l + 16).attr('y1', m.t + 28).attr('y2', m.t + 28).attr('stroke', '#FFD700').attr('stroke-width', 2.5);
+  svg.append('text').attr('x', m.l + 20).attr('y', m.t + 32).text('fitted curve');
+  const go = () => { const D0 = REDUCED ? 0 : 1;
+    ticks.transition().delay((d, i) => D0 * i * 4).duration(D0 * 300).attr('opacity', .8);
+    bins.transition().delay(D0 * 700).duration(D0 * 600).attr('r', d => 3.5 + Math.sqrt(d.n) * .9);
+    path.transition().delay(D0 * 1100).duration(D0 * 1600).ease(d3.easeCubicInOut).attr('stroke-dashoffset', 0);
+    svg.selectAll('g.guide').transition().delay(D0 * 2700).duration(D0 * 500).attr('opacity', 1); };
+  host.closest('.rv') ? host.closest('.rv').addEventListener('reveal', go, { once: true }) : go();
+}
+function dumbbell(host, E) {
+  const rows = E.rows, W = 620, rh = 40, m = { t: 30, r: 54, b: 30, l: 112 }, H = m.t + rows.length * rh + m.b;
+  const x = d3.scaleLinear([40, 100], [m.l, W - m.r]).clamp(true), svg = d3.select(host).append('svg').attr('viewBox', `0 0 ${W} ${H}`);
+  svg.append('g').attr('class', 'grid').attr('transform', `translate(0,${m.t})`).call(d3.axisTop(x).tickValues([50, 60, 70, 80, 90, 100]).tickSize(-(rows.length * rh)).tickFormat(''));
+  svg.append('g').attr('class', 'axis').attr('transform', `translate(0,${H - m.b + 4})`).call(d3.axisBottom(x).tickValues([50, 60, 70, 80, 90, 100]).tickSize(0).tickFormat(d => d + '%'));
+  svg.append('line').attr('x1', x(50)).attr('x2', x(50)).attr('y1', m.t).attr('y2', H - m.b).attr('stroke', '#94a3b8').attr('stroke-dasharray', '3 4');
+  svg.append('circle').attr('cx', m.l + 6).attr('cy', 12).attr('r', 5).attr('fill', '#64748b'); svg.append('text').attr('x', m.l + 16).attr('y', 16).text('all games');
+  svg.append('circle').attr('cx', m.l + 96).attr('cy', 12).attr('r', 5).attr('fill', '#FFD700'); svg.append('text').attr('x', m.l + 106).attr('y', 16).text(`games level at 15:00 (within ${num(E.thr)} gold)`);
+  const g = svg.selectAll('g.r').data(rows).join('g').attr('class', 'r').attr('transform', (d, i) => `translate(0,${m.t + i * rh + rh / 2})`);
+  g.append('text').attr('class', 'lab').attr('x', m.l - 12).attr('y', 5).attr('text-anchor', 'end').text(d => d.label);
+  const bar = g.append('line').attr('x1', d => x(d.raw * 100)).attr('x2', d => x(d.raw * 100)).attr('stroke', '#475569').attr('stroke-width', 3);
+  g.append('circle').attr('cx', d => x(d.raw * 100)).attr('r', 6).attr('fill', '#64748b').attr('stroke', '#080b12').attr('stroke-width', 2);
+  const ev = g.append('circle').attr('cx', d => x(d.raw * 100)).attr('r', 7).attr('fill', '#FFD700').attr('stroke', '#080b12').attr('stroke-width', 2);
+  const lab = g.append('text').attr('class', 'lab').attr('y', 5).attr('opacity', 0).attr('x', d => x(Math.max(d.raw, d.even) * 100) + 12).text(d => pct(d.even));
+  g.append('rect').attr('x', m.l).attr('width', W - m.l).attr('y', -rh / 2).attr('height', rh).attr('fill', 'transparent')
+    .call(withTip, d => `<b>${esc(d.label)}</b><br>All games: <b>${pct(d.raw)}</b> (${d.n})<br>Level at 15:00: <b>${pct(d.even)}</b> (${d.n_even})`);
+  const go = () => { const t = REDUCED ? 0 : 1100; ev.transition().delay(REDUCED ? 0 : 500).duration(t).ease(d3.easeCubicInOut).attr('cx', d => x(d.even * 100));
+    bar.transition().delay(REDUCED ? 0 : 500).duration(t).ease(d3.easeCubicInOut).attr('x2', d => x(d.even * 100)); lab.transition().delay(REDUCED ? 0 : 1500).duration(300).attr('opacity', 1); };
+  host.closest('.rv') ? host.closest('.rv').addEventListener('reveal', go, { once: true }) : go();
+}
+
 /* ════════════ pages ════════════ */
 const pages = {};
 
@@ -499,6 +562,8 @@ pages.champions = el => {
     <div class="pills"><select id="cx">${names.map(n => `<option>${esc(n)}</option>`).join('')}</select><span class="note" style="margin:0 0 0 8px">Champions with 3+ games.</span></div><div id="cxcard"></div>
     <div class="cols w32 rv"><div><h2>Contested vs. winning <small>bubble = games played</small></h2><div class="panel"><div id="sc"></div></div></div>
     <div><h2>Most reliable winners</h2><div id="rel"></div><p class="note">Ranked by the low end of a 95% interval, so a 2–0 fluke can't top the list.</p></div></div>
+    <h2>Wins lane vs. wins game <small>each champion's average gold lead over its lane opponent at 15:00 · bubble = games</small></h2>
+    <div class="cols w32 rv"><div class="panel"><div id="lg"></div></div><div><p class="note" style="margin-top:0"><b>Top right:</b> wins lane and wins the game.<br><b>Top left:</b> loses lane, wins anyway — the scalers and teamfighters.<br><b>Bottom right:</b> wins lane, loses the game — lane bullies that fall off.<br><b>Bottom left:</b> a rough season.</p><div id="lgx"></div></div></div>
     <h2>Every champion <small>click a column to sort</small></h2><div id="tbl"></div>
     <div class="cols rv"><div><h2>Best duos <small>same team, 4+ games together</small></h2><div id="duo"></div></div>
     <div><h2>Lopsided lanes <small>same role, 3+ meetings</small></h2><div id="mu"></div></div></div>
@@ -521,6 +586,16 @@ pages.champions = el => {
   const lab = new Set([...[...sc].sort((a, b) => b.presence - a.presence).slice(0, 7), ...[...sc].sort((a, b) => Math.abs(b.wr - .5) * Math.sqrt(b.picks) - Math.abs(a.wr - .5) * Math.sqrt(a.picks)).slice(0, 5)].map(c => c.name));
   scatter($('#sc', el), sc.map(c => ({ x: c.presence * 100, y: c.wr * 100, r: Math.max(4, Math.sqrt(c.picks) * 2.4), color: c.wr >= .5 ? '#4f8ff7' : '#e5484d', label: lab.has(c.name) ? c.name : '', tip: `<b>${esc(c.name)}</b><br>${c.wins}W in ${c.picks} games (${pct(c.wr)})<br>${c.bans} bans · ${pct(c.presence)} presence` })),
     { xl: 'Presence (pick + ban)', yl: 'Win rate', xf: d => d + '%', yf: d => d + '%', hline: 50, yDomain: [0, 100], h: 400, from: 50 });
+  const lg = sc.filter(c => c.gd15 != null);
+  if (lg.length > 4) {
+    const ext = new Set([...[...lg].sort((a, b) => b.gd15 - a.gd15).slice(0, 4), ...[...lg].sort((a, b) => a.gd15 - b.gd15).slice(0, 4), ...[...lg].sort((a, b) => (b.wr - .5) * Math.sqrt(b.picks) - (a.wr - .5) * Math.sqrt(a.picks)).slice(0, 3)].map(c => c.name));
+    scatter($('#lg', el), lg.map(c => ({ x: c.gd15, y: c.wr * 100, r: Math.max(4, Math.sqrt(c.picks) * 2.4), color: ROLE_COLOR[c.role] || '#64748b', label: ext.has(c.name) ? c.name : '', tip: `<b>${esc(c.name)}</b> · ${ROLE[c.role] || ''}<br>${sign(c.gd15)} gold vs lane opponent at 15:00<br>${c.wins}–${c.picks - c.wins} (${pct(c.wr)})` })),
+      { xl: 'Average gold difference vs. lane opponent at 15:00', yl: 'Win rate', xf: d => sign(d), yf: d => d + '%', hline: 50, vline: 0, yDomain: [0, 100], h: 400, from: 50 });
+    const sca = lg.filter(c => c.gd15 < 0 && c.wr > .5).sort((a, b) => b.wr - a.wr).slice(0, 4), bul = lg.filter(c => c.gd15 > 0 && c.wr < .5).sort((a, b) => b.gd15 - a.gd15).slice(0, 4);
+    $('#lgx', el).innerHTML = `<div class="panel"><h3>Lose lane, win game</h3>${sca.map(c => `<div class="kv"><span>${esc(c.name)}</span><b>${sign(c.gd15)} · ${pct(c.wr)}</b></div>`).join('') || '<div class="kv"><span>nobody</span></div>'}
+      <h3 style="margin-top:12px">Win lane, lose game</h3>${bul.map(c => `<div class="kv"><span>${esc(c.name)}</span><b>${sign(c.gd15)} · ${pct(c.wr)}</b></div>`).join('') || '<div class="kv"><span>nobody</span></div>'}</div>
+      <p class="note">Dot colour is the role: ${Object.keys(ROLE).map(r => `<span style="color:${ROLE_COLOR[r]}">●</span> ${ROLE[r]}`).join(' ')}</p>`;
+  } else $('#lg', el).closest('.cols').previousElementSibling.remove(), $('#lg', el).closest('.cols').remove();
   $('#rel', el).innerHTML = hbars([...sc].sort((a, b) => b.wlo - a.wlo).slice(0, 10).map(c => ({ label: c.name, value: c.wr, text: `${pct(c.wr)}  ·  ${c.wins}–${c.picks - c.wins}` })));
   sortable($('#tbl', el), [{ k: 'name', label: 'Champion', cls: 'team' }, { k: 'role', label: 'Role', f: v => ROLE[v] || '–' },
     { k: 'presence', label: 'Presence', num: 1, html: r => cellBar(r.presence, ch[0]?.presence || 1, pct(r.presence)) }, { k: 'picks', label: 'Picks', num: 1 }, { k: 'bans', label: 'Bans', num: 1 }, { k: 'wins', label: 'Wins', num: 1 },
@@ -532,12 +607,20 @@ pages.champions = el => {
 };
 
 pages.draft = el => {
-  const D = state.D, ch = D.champions || [], dr = D.draft || {}, I = D.items || {}, banned = [...ch].sort((a, b) => b.bans - a.bans), sf = I.sunfire;
+  const D = state.D, ch = D.champions || [], dr = D.draft || {}, I = D.items || {}, banned = [...ch].sort((a, b) => b.bans - a.bans), sf = I.sunfire, C = D.lab?.counter;
+  const cl = (xs, f) => xs?.length ? xs.map(c => `<div class="kv"><span>${esc(c.c)}</span><b>${f(c)}</b></div>`).join('') : '<div class="kv"><span>not enough games</span></div>';
   el.innerHTML = `
     <div class="banner"><div><h1>Draft & Items</h1><p>${dr.drafts ? dr.drafts + ' drafts from the league site\'s draft tool' : 'Bans and builds'}</p></div><div class="badge ${D.band}">${D.band}</div></div>
     <div class="cols rv"><div id="bans"></div><div id="prio"></div></div>
     <div class="cols rv" style="margin-top:22px"><div class="panel"><h3>Which roles get locked first</h3><p class="note" style="margin-top:-4px">Share of each role's picks by draft slot · blue numbers are blue side's picks</p><div id="slot"></div></div>
     <div class="panel"><h3>Blue side win rate by week</h3><p class="note" style="margin-top:-4px">Blue side has first pick</p><div id="side"></div></div></div>
+    ${C ? `<h2>Does the counterpick work? <small>${num(C.n)} lane matchups · the player who picked after their lane opponent</small></h2>
+    <div class="chyrons rv">${chyron('Counterpicker wins lane', pct(C.lane_won), 'ahead in gold at 15:00', { to: C.lane_won * 100, suf: '%' })}
+      ${chyron('Gold edge at 15', sign(C.gd15), 'average, counterpicker', { cls: 'white' })}
+      ${chyron('Counterpicker wins game', pct(C.wr), C.wr < .52 ? 'no better than a coin flip' : 'team win rate', { to: C.wr * 100, suf: '%', cls: 'white' })}</div>
+    <div class="cols rv"><div>${hbars(C.roles.map(r => ({ label: ROLE[r.role], value: Math.max(r.lane_won, .01), text: `${pct(r.lane_won)} win lane  ·  ${sign(r.gd15)} gold`, color: ROLE_COLOR[r.role], title: `${r.n} matchups · team won ${pct(r.wr)}` })), { title: 'Where picking second helps', sub: 'How often the later pick is ahead of its lane opponent at 15:00' })}</div>
+    <div class="cols"><div class="panel"><h3>Safest blind picks</h3><p class="note" style="margin-top:-4px">Picked first in lane, 4+ times · gold at 15</p>${cl(C.blind_safe, c => `<span class="${c.gd15 >= 0 ? 'up' : 'down'}">${sign(c.gd15)}</span> · ${c.w}–${c.g - c.w}`)}</div>
+      <div class="panel"><h3>Punished when blind</h3><p class="note" style="margin-top:-4px">Picked first in lane, 4+ times · gold at 15</p>${cl(C.blind_risky, c => `<span class="${c.gd15 >= 0 ? 'up' : 'down'}">${sign(c.gd15)}</span> · ${c.w}–${c.g - c.w}`)}</div></div></div>` : ''}
     <h2>Items <small>completed items in the final build · click a column to sort</small></h2>
     <div class="cols w32 rv"><div id="items"></div><div><div id="iwin"></div><p class="note">Items in a final build are a result as much as a cause — winning teams get to finish expensive items, losing teams end on defensive ones.</p>
       ${sf ? `<div class="sunfire"><div class="k">Slamurai's Sunfire Counter</div><div class="q">"This item is grief" — Slamurai, probably</div><div class="row"><div class="big" data-to="${sf.total}">0</div><div><b>${pct(sf.wr)}</b><small>win rate</small></div><div><b class="up">${sf.wins}</b><small>wins</small></div><div><b class="down">${sf.losses}</b><small>losses</small></div></div><div class="q" style="margin-top:8px">Repeat offenders: ${sf.top.map(p => `${esc(p.p)} ×${p.n}`).join(' · ')}</div></div>` : ''}</div></div>`;
@@ -571,7 +654,8 @@ pages.draft = el => {
 };
 
 pages.wins = el => {
-  const D = state.D, W = D.wins || { edges: [] }, cards = D.styles || [];
+  const D = state.D, W = D.wins || { edges: [] }, cards = D.styles || [], L = D.lab || {}, G = L.gold, E = L.even, M = L.mix;
+  const fbE = E?.rows.find(r => r.label === 'First blood'), blown = G ? [...G.dots].filter(d => !d.w).sort((a, b) => b.x - a.x)[0] : null;
   const ladder = (rows, lab) => rows.length ? hbars(rows.map(r => ({ label: lab(r.n), value: Math.max(r.wr, .004), text: `${pct(r.wr)}  ·  ${r.games} games`, color: r.wr >= .5 ? 'var(--gold)' : '#7a6410' }))) : '<p class="note">Objective counts aren\'t recorded for this season.</p>';
   const h1 = W.herald?.find(h => h.n === 1), b0 = W.barons?.find(b => b.n === 0), b1 = W.barons?.find(b => b.n === 1), fb = W.edges.find(e => e.label === 'First blood');
   el.innerHTML = `
@@ -584,6 +668,22 @@ pages.wins = el => {
     <div class="cols rv"><div><h2>What the winner had <small>win rate of the team that got each edge</small></h2><div id="edges"></div></div>
     <div><h2>Dragons <small>win rate by drakes taken</small></h2>${ladder(W.dragons || [], n => n >= 4 ? '4+ (soul)' : n + (n === 1 ? ' dragon' : ' dragons'))}
       <h2>Barons</h2>${ladder(W.barons || [], n => n >= 2 ? '2+ barons' : n + (n === 1 ? ' baron' : ' barons'))}</div></div>
+    ${G ? `<h2>How much is a gold lead worth? <small>${G.n} games · the team ahead at 15:00</small></h2>
+    <div class="cols w32 rv"><div class="panel"><div id="gcurve"></div></div>
+    <div><div class="chyrons" style="grid-template-columns:1fr 1fr">${chyron('+1,000 gold', pct(G.p1k), 'chance to win', { to: G.p1k * 100, suf: '%' })}${chyron('+3,000 gold', pct(G.p3k), 'chance to win', { to: G.p3k * 100, suf: '%', cls: 'white' })}</div>
+      <p class="note">The curve is fitted to every game: an even game is a coin flip, and each extra 1,000 gold at 15:00 moves the odds along it. ${G.need75 ? `A lead needs to reach about <b>${num(Math.round(G.need75 / 100) * 100)}</b> gold before the leader is a 3-in-4 favourite.` : ''}
+      ${blown ? `<br><br>Biggest lead thrown: <b>${esc(T(blown.t).name)}</b> were ${num(blown.x)} up on ${esc(T(blown.o).name)} in week ${blown.wk}.` : ''}</p></div></div>` : ''}
+    ${E ? `<h2>Does the objective win the game, or does the winner take the objective? <small>${E.games} of ${E.of} games were level at 15:00</small></h2>
+    <div class="cols w32 rv"><div class="panel"><div id="dumb"></div></div>
+    <div><p class="note" style="margin-top:0">Raw win rates flatter every objective, because the team already ahead is the one that takes it. The gold dots ask the same question using only games that were still level at 15:00.
+      ${fbE ? `<br><br><b>First blood</b> drops from ${pct(fbE.raw)} to <b>${pct(fbE.even)}</b> — ${fbE.even < .53 ? 'on its own it means nothing.' : 'a small real edge.'}` : ''}
+      <br><br>Dragons, Barons and kills are totals for the whole game, so they still include the winner cleaning up at the end — read those as "what winning looks like", not "what causes it".</p>
+      ${(L.lanes || []).length ? hbars(L.lanes.map(r => ({ label: ROLE[r.role], value: r.wr, text: `${pct(r.wr)}`, color: ROLE_COLOR[r.role], title: `${r.n} games · average lead ${num(r.avg)} gold` })), { title: 'Which lane lead matters most', sub: 'Team win rate when that role is ahead of its opposite number in gold at 15:00' }) : ''}</div></div>` : ''}
+    ${M ? `<h2>Damage mix <small>share of a team's damage to champions that is physical</small></h2>
+    <div class="cols rv"><div>${hbars(M.bins.map(b => ({ label: b.label, value: b.wr, text: `${pct(b.wr)}  ·  ${b.n} games`, color: b.wr >= .5 ? 'var(--gold)' : '#7a6410' })))}</div>
+    <div><p class="note" style="margin-top:0">One row per team per game. Heavy magic damage comps ${M.bins[0].wr < .47 ? 'have struggled' : 'have held up fine'} here; ${M.bins[M.bins.length - 1].wr > .53 ? 'heavy physical comps have done well.' : 'heavy physical comps have not been punished much either.'}
+      ${M.most_ad ? `<br><br>Most physical team: <b>${esc(T(M.most_ad.t).name)}</b> (${pct(M.most_ad.ad)}). Most magic: <b>${esc(T(M.most_ap.t).name)}</b> (${pct(1 - M.most_ap.ad)} magic).` : ''}
+      <br><br>Damage dealt is partly a result: a fed AD carry pushes the share up in games that team was already winning.</p></div></div>` : ''}
     ${W.comebacks?.length ? `<h2>Biggest comebacks <small>largest gold deficit at 15:00 that still ended in a win</small></h2><div class="grid rv">${W.comebacks.map(c => `<div class="story"><div class="t">WEEK ${c.week} · ${num(c.mins)} MIN</div><div class="x"><b>${esc(T(c.team).name)}</b> were <b class="down">${num(c.deficit)}</b> gold down to ${esc(T(c.opp).name)} at 15:00 — and won.</div></div>`).join('')}</div>` : ''}
     <h2>How each team wins <small>tags are earned from the numbers · click a card for the full profile</small></h2>
     <div class="styles rv">${cards.map(c => { const r = ([w, g]) => g ? `${w}–${g - w}` : '–', roles = Object.entries(c.dmg);
@@ -594,6 +694,8 @@ pages.wins = el => {
     <p class="note">Records are games. The coloured bar is each role's share of the team's damage to champions.</p>`;
   $('#edges', el).innerHTML = W.edges.length ? hbars(W.edges.map(e => ({ label: e.label, value: e.wr, text: `${pct(e.wr)}  ·  ${e.n} games` }))) : '<p class="note">Not enough data.</p>';
   el.querySelectorAll('.sty').forEach(c => c.onclick = () => teamProfile(c.dataset.t));
+  if (G) goldCurve($('#gcurve', el), G);
+  if (E) dumbbell($('#dumb', el), E);
 };
 
 pages.records = el => {

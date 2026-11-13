@@ -29,6 +29,7 @@ from app.league import (
     load_seasons, player_table, team_table,
 )
 from app.viz import team_colors
+from app.labs import lab
 from app.extras import (
     champion_extras, fun_awards, item_table, real_bracket, seeded_bracket, team_styles,
     title_odds, win_conditions,
@@ -313,6 +314,7 @@ def build_season(db: str, sid: str) -> dict:
     out["champ_x"] = champion_extras(S, _champion_keys())
     out["fun"] = fun_awards(S)
     out["items"] = item_table(db, S)
+    out["lab"] = lab(S)
     return clean(out)
 
 
